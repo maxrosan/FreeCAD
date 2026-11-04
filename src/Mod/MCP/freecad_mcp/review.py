@@ -116,17 +116,69 @@ def _anchor(obj):
     return None
 
 
-def surroundings(doc, point, radius, limit=25):
+MANY_SUBSHAPES = 64  # above this, measure only the pieces whose bounding box is near the point
+_pieces_cache = {}  # (document, object) -> (shape hash, pieces, their bounds) of large shapes
+
+
+def _box_distance(bounds, point):
+    """Distance from `point` to a box (xmin, xmax, ymin, ymax, zmin, zmax); 0 inside it."""
+    xmin, xmax, ymin, ymax, zmin, zmax = bounds
+    dx = max(xmin - point.x, 0.0, point.x - xmax)
+    dy = max(ymin - point.y, 0.0, point.y - ymax)
+    dz = max(zmin - point.z, 0.0, point.z - zmax)
+    return (dx * dx + dy * dy + dz * dz) ** 0.5
+
+
+def _bounds(box):
+    return (box.XMin, box.XMax, box.YMin, box.YMax, box.ZMin, box.ZMax)
+
+
+def _pieces(obj, shape):
+    """Faces (or edges, or vertices) of a large shape with their bounds, or None for a small one.
+
+    Listing the pieces of a big compound (an imported PDF layer has thousands of strokes) is
+    the slow part, so it is kept until the shape changes."""
+    key = (obj.Document.Name, obj.Name)
+    try:
+        code = shape.hashCode()
+    except Exception:
+        code = None
+    cached = _pieces_cache.get(key)
+    if cached is not None and code is not None and cached[0] == code:
+        return cached[1]
+    pieces = shape.Faces or shape.Edges or shape.Vertexes
+    entry = [(piece, _bounds(piece.BoundBox)) for piece in pieces] if len(pieces) > MANY_SUBSHAPES else None
+    if code is not None:
+        _pieces_cache[key] = (code, entry)
+    return entry
+
+
+def _shape_distance(obj, shape, point, vertex, radius):
+    """Distance from `point` to `shape`, or None when it is surely farther than `radius`."""
+    if _box_distance(_bounds(shape.BoundBox), point) > radius:
+        return None
+    pieces = _pieces(obj, shape)
+    if pieces is None:
+        return shape.distToShape(vertex)[0]
+    near = [piece for piece, bounds in pieces if _box_distance(bounds, point) <= radius]
+    return min((piece.distToShape(vertex)[0] for piece in near), default=None)
+
+
+def surroundings(doc, point, radius, limit=25, progress=None):
     """Objects within `radius` of `point`, nearest first: [(distance, object)].
 
     Lines of a symbol count as the whole symbol; containers (layers, groups, levels) are
-    skipped, their members are listed instead.
+    skipped, their members are listed instead. `progress(done, total)`, if given, is called
+    as the objects are examined (to keep a progress bar moving).
     """
     import Part
 
     vertex = Part.Vertex(point)
     best = {}
-    for obj in doc.Objects:
+    objects = doc.Objects
+    for index, obj in enumerate(objects):
+        if progress is not None and index % 20 == 0:
+            progress(index, len(objects))
         if is_comment(obj) or obj.TypeId in ("App::DocumentObjectGroup", "App::LinkGroup") \
                 or obj.TypeId.startswith("TechDraw::") \
                 or getattr(getattr(obj, "Proxy", None), "Type", None) in ("Layer", "LayerContainer", "BuildingPart"):
@@ -134,8 +186,10 @@ def surroundings(doc, point, radius, limit=25):
         shape = getattr(obj, "Shape", None)
         if shape is not None and not shape.isNull():
             try:
-                dist = shape.distToShape(vertex)[0]
+                dist = _shape_distance(obj, shape, point, vertex, radius)
             except Exception:
+                continue
+            if dist is None:
                 continue
         else:
             anchor = _anchor(obj)
@@ -166,9 +220,9 @@ def _label(obj):
     return f"X{obj.Number} - {short}"
 
 
-def make_comment(doc, position, text, target=None, author=None, radius=1000.0):
+def make_comment(doc, position, text, target=None, author=None, radius=1000.0, progress=None):
     """Create comment X<n> at `position` (a Vector) about `target`, recording what is within
-    `radius` mm around it."""
+    `radius` mm around it (`progress` as in surroundings)."""
     number = max((c.Number for c in comments(doc)), default=0) + 1
     obj = doc.addObject("App::FeaturePython", "Comentario")
     ReviewComment(obj)
@@ -181,7 +235,7 @@ def make_comment(doc, position, text, target=None, author=None, radius=1000.0):
     obj.History = [f"{_now()} {obj.Author}: aberto - {text}"]
     obj.Radius = radius
     obj.Surroundings = [f"{n['label']} ({n['type']}) a {n['distance_mm']:.0f} mm"
-                        for n in map(_describe_near, surroundings(doc, position, radius))]
+                        for n in map(_describe_near, surroundings(doc, position, radius, progress=progress))]
     obj.Label = _label(obj)
     if App.GuiUp:
         from .review_gui import ViewProviderReviewComment

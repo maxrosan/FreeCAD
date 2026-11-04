@@ -208,10 +208,47 @@ class _PointPicker:
         text = text.strip()
         if not ok or not text:
             return
-        self.doc.openTransaction("Comentário de revisão")
-        review.make_comment(self.doc, point, text, target, radius=surroundings_radius(self.doc))
-        self.doc.commitTransaction()
-        self.doc.recompute()
+        with _Busy(f"Comentário X{number}",
+                   "Registrando o comentário: verificando o que há em volta do ponto...") as busy:
+            self.doc.openTransaction("Comentário de revisão")
+            review.make_comment(self.doc, point, text, target, radius=surroundings_radius(self.doc),
+                                progress=busy.progress)
+            self.doc.commitTransaction()
+            self.doc.recompute()
+
+
+class _Busy:
+    """Wait cursor, and a progress bar if the work takes more than a moment (big drawings)."""
+
+    def __init__(self, title, message):
+        self.title, self.message = title, message
+
+    def __enter__(self):
+        from PySide import QtCore, QtWidgets
+
+        self.app = QtWidgets.QApplication
+        self.app.setOverrideCursor(QtCore.Qt.WaitCursor)
+        Gui.getMainWindow().statusBar().showMessage(self.message)
+        self.dialog = QtWidgets.QProgressDialog(self.message, "", 0, 100, Gui.getMainWindow())
+        self.dialog.setWindowTitle(self.title)
+        self.dialog.setCancelButton(None)  # the work cannot be interrupted halfway
+        self.dialog.setWindowModality(QtCore.Qt.WindowModal)
+        self.dialog.setMinimumDuration(300)  # shown only if it is not over by then
+        self.dialog.setValue(0)
+        return self
+
+    def progress(self, done, total):
+        self.dialog.setMaximum(max(total, 1))
+        self.dialog.setValue(done)
+        self.app.processEvents()
+
+    def __exit__(self, *exc):
+        self.dialog.reset()
+        self.dialog.close()
+        self.dialog.deleteLater()
+        Gui.getMainWindow().statusBar().clearMessage()
+        self.app.restoreOverrideCursor()
+        return False
 
 
 class AddCommentCommand:
