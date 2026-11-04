@@ -43,15 +43,32 @@ def call(name, params=None):
     try:
         result = func(**(params or {}))
     except Exception as e:
-        if doc:
-            doc.abortTransaction()
+        _end_transaction(doc, commit=False)
         error = {"message": f"{type(e).__name__}: {e}"}
         if not isinstance(e, (CommandError, TypeError, ValueError)):
             error["traceback"] = traceback.format_exc()
         return {"error": error}
-    if doc:
-        doc.commitTransaction()
+    _end_transaction(doc, commit=True)
     return {"result": result}
+
+
+def _end_transaction(doc, commit):
+    """Close the undo transaction, unless the command closed the document itself
+    (run_python code may close it and open another with the same name)."""
+    if doc is None or not _alive(doc):
+        return
+    if commit:
+        doc.commitTransaction()
+    else:
+        doc.abortTransaction()
+
+
+def _alive(doc):
+    try:
+        doc.Name  # any attribute access fails once the document is closed
+    except Exception:
+        return False
+    return True
 
 
 _loaded = False

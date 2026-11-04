@@ -90,6 +90,22 @@ class TestDraft2D(unittest.TestCase):
         self.assertEqual(res["result"], 5)
         self.assertEqual(res["stdout"], "hi\n")
 
+    def test_run_python_recreating_the_document(self):
+        # A script that rebuilds its document closes the one the undo transaction was opened on.
+        code = ("name = App.ActiveDocument.Name\n"
+                "App.closeDocument(name)\n"
+                "App.newDocument(name)\n"
+                "result = 'rebuilt'")
+        res = call("run_python", code=code)
+        self.assertEqual(res["result"], "rebuilt")
+        self.doc = App.getDocument("MCPTest")  # the new document, closed by tearDown
+
+    def test_failing_run_python_after_closing_the_document(self):
+        code = "App.closeDocument(App.ActiveDocument.Name)\nraise ValueError('boom')"
+        reply = registry.call("run_python", {"code": code})
+        self.assertIn("boom", reply["error"]["message"])
+        self.doc = App.newDocument("MCPTest")
+
 
 class TestBim(unittest.TestCase):
     def setUp(self):

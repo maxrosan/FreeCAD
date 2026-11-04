@@ -195,24 +195,63 @@ def export_sheet(path, page=None):
         raise CommandError("Use a .pdf, .svg or .dxf path")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     doc.recompute()
+    # PDF and SVG are rendered from the page's graphics scene, which exists only while the
+    # page is open in a tab.
+    import FreeCADGui as Gui
+
+    obj.ViewObject.show()
+    pending = wait_for_views(obj)
+    reply = {"file": path, "page": obj.Label}
+    if pending:
+        reply["warning"] = f"Views still empty after waiting, exported without them: {pending}"
     if ext == ".dxf":
         import TechDraw
 
         TechDraw.writeDXFPage(obj, path)
-        return {"file": path, "page": obj.Label}
-    # PDF and SVG are rendered from the page's graphics scene, which exists only while the
-    # page is open in a tab.
-    import FreeCADGui as Gui
-    from PySide import QtWidgets
-
-    obj.ViewObject.show()
-    QtWidgets.QApplication.processEvents()
-    if ext == ".pdf":
+    elif ext == ".pdf":
         TechDrawGui.exportPageAsPdf(obj, path)
     else:
         TechDrawGui.exportPageAsSvg(obj, path)
     Gui.activateView("Gui::View3DInventor", True)
-    return {"file": path, "page": obj.Label}
+    return reply
+
+
+def _projected_views(page):
+    """Views of a page computed by hidden-line removal (DrawViewPart), including projection group items."""
+    views = []
+    for view in page.Views:
+        if view.isDerivedFrom("TechDraw::DrawProjGroup"):
+            views.extend(view.Views)
+        elif view.isDerivedFrom("TechDraw::DrawViewPart"):
+            views.append(view)
+    return views
+
+
+def wait_for_views(page, timeout=180.0):
+    """Wait until the projected views of a page have their geometry, then let the page repaint.
+
+    TechDraw projects views in background threads after a recompute; exporting before they
+    finish leaves them out of the file. Returns the labels of views still empty at the timeout.
+    """
+    import time
+
+    from PySide import QtWidgets
+
+    views = _projected_views(page)
+    deadline = time.time() + timeout
+    while True:
+        QtWidgets.QApplication.processEvents()
+        pending = [v.Label for v in views if not v.getVisibleEdges()]
+        if not pending or time.time() > deadline:
+            break
+        time.sleep(0.2)
+    # The scene redraws views from queued signals once their geometry arrives.
+    page.requestPaint()
+    end = time.time() + 0.5
+    while time.time() < end:
+        QtWidgets.QApplication.processEvents()
+        time.sleep(0.05)
+    return pending
 
 
 @command("export_model")
