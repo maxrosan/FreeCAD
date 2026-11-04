@@ -14,6 +14,10 @@ SET(MCP_SRCS
     freecad_mcp/handlers/document.py
     freecad_mcp/handlers/draft2d.py
     freecad_mcp/handlers/electrical.py
+    freecad_mcp/handlers/review.py
+    freecad_mcp/review.py
+    freecad_mcp/review_gui.py
+    Resources/icons/MCP_Comment.svg
     freecad_mcp/handlers/bim3d.py
     freecad_mcp/handlers/techdraw.py
     freecad_mcp/handlers/python.py

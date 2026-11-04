@@ -24,6 +24,14 @@ Starts a local command server that the FreeCAD MCP bridge
 
 p = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/MCP")
 
+# "X" review comments: a command in every workbench (File toolbar, Tools menu)
+try:
+    import freecad_mcp.review_gui
+
+    freecad_mcp.review_gui.install()
+except Exception as e:
+    FreeCAD.Console.PrintError(f"MCP: could not add the review comment command: {e}\n")
+
 if p.GetBool("AutoStart", True):
     try:
         import freecad_mcp.server

@@ -6,6 +6,7 @@ import os
 
 import FreeCAD as App
 
+from .. import review
 from ..registry import CommandError, command
 from .common import SETTINGS_NAME, active_document, get_object, recompute, settings
 
@@ -45,8 +46,9 @@ def _sources(doc, names):
 
     sources = []
     for obj in doc.Objects:
-        if obj.Name == SETTINGS_NAME or obj.TypeId.startswith("TechDraw::") or obj.TypeId == "App::LinkGroup":
-            continue
+        if obj.Name in (SETTINGS_NAME, review.GROUP_NAME) or review.is_comment(obj) \
+                or obj.TypeId.startswith("TechDraw::") or obj.TypeId == "App::LinkGroup":
+            continue  # review comments never go on sheets
         kind = _type(obj)
         if kind in ("Layer", "BuildingPart") or obj.TypeId == "App::DocumentObjectGroup":
             if not any(_type(p) == "BuildingPart" for p in obj.InList):

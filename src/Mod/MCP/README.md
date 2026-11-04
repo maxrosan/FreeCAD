@@ -56,6 +56,13 @@ starts FreeCAD outside that tree (through WMI if needed), so the drawing stays o
   and the conductor marks (fase, neutro, retorno, terra). Symbols are data in
   `freecad_mcp/handlers/electrical.py`, in paper mm, scaled by the drawing scale on insertion.
   NBR 5444 was cancelled in 2014 without replacement; its symbols are still the ones in use.
+* Review comments: the **X** button (File toolbar and Tools menu of every workbench) pins a
+  comment where you click next: a dot with "X<n>: text", red when open, green when fixed,
+  orange when reopened. Each comment records the object under the click, what was around it
+  (20 mm on paper, 1 m at 1:50) and a history; double-click it to edit, mark fixed or reopen.
+  The assistant works through them with `list_review_comments`, `focus_review_comment` (an
+  image of the area), `resolve_review_comment` and `reopen_review_comment`. Comments are saved
+  with the document and never go on sheets. Code: `freecad_mcp/review.py`, `review_gui.py`.
 * Sheets (TechDraw): `create_sheet` (ISO A4 to A0 at a scale), `export_sheet` (PDF, SVG, DXF),
   `export_model` (DXF, IFC, STEP...).
 * PDF: `pdf_info`, `pdf_render_page`, `pdf_extract`, `pdf_calibrate`, `pdf_set_context`,

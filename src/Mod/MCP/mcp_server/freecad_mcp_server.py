@@ -57,6 +57,14 @@ Electrical plans (Brazilian NBR 5444 symbols): set_drawing_scale first (e.g. 50)
 insert_electrical_symbol for outlets, switches, lights and panels, and draw_conduit for the conduits
 with their conductors (fase, neutro, retorno, terra), circuit number and gauge.
 
+Review comments ("X" balloons the person pins on the drawing with the X button):
+when asked to apply the corrections, call list_review_comments (pending ones), then for each
+comment focus_review_comment to see the area, and read its text, the object under the click
+(target) and its surroundings. The comment is about that area, not only the target: consider
+the nearby elements too. Fix it, check with a screenshot, then resolve_review_comment with a
+note of what changed. Mark as fixed only what was really fixed; if something is unclear, leave
+it pending and say why. Reopen (reopen_review_comment) only when the person asks.
+
 Drawing tools take an optional layer (name, created if missing) and style:
 {color: '#rrggbb', line_width: px, draw_style: Solid|Dashed|Dotted|Dashdot, font_size: mm}."""
 
@@ -517,6 +525,51 @@ def draw_conduit(points: list[Point], installation: Literal["teto", "parede", "p
     return fc("draw_conduit", points=points, installation=installation, diameter=diameter,
               conductors=conductors, circuit=circuit, gauge=gauge, marks_at=marks_at, scale=scale,
               layer=layer, label=label)
+
+
+# --- review comments ("X") ------------------------------------------------------
+
+
+@tool()
+def list_review_comments(status: Literal["pendentes", "todos", "Aberto", "Corrigido", "Reaberto"] = "pendentes",
+                         radius: Length | None = None) -> dict:
+    """Review comments pinned on the drawing (X1, X2...): text, status, history, the object under the
+    click (target), what was around it when the comment was made and what is around it now
+    (within `radius` mm; default the radius recorded with each comment)."""
+    return fc("list_review_comments", status=status, radius=radius)
+
+
+@tool()
+def focus_review_comment(number: int, size: Length | None = None) -> list:
+    """Centre the top view on comment X<number> and return an image of the area (`size` mm high,
+    default 4 x its surroundings radius) plus the comment details and surroundings."""
+    info = fc("focus_review_comment", number=number, size=size)
+    shot = fc("get_screenshot", direction="current", width=1400, height=1000, fit=False)
+    return [Image(path=shot["path"]), json.dumps(info, ensure_ascii=False)]
+
+
+@tool()
+def resolve_review_comment(number: int, note: str = "") -> dict:
+    """Mark comment X<number> as fixed (Corrigido), with a note of what was changed."""
+    return fc("resolve_review_comment", number=number, note=note)
+
+
+@tool()
+def reopen_review_comment(number: int, reason: str = "") -> dict:
+    """Reopen a fixed comment (Reaberto). Only when the person asks for it."""
+    return fc("reopen_review_comment", number=number, reason=reason)
+
+
+@tool()
+def add_review_comment(position: Point, text: str, target: str | None = None, radius: Length = 1000) -> dict:
+    """Pin a review comment yourself (e.g. a doubt for the person), at `position` mm, about `target`."""
+    return fc("add_review_comment", position=position, text=text, target=target, radius=radius)
+
+
+@tool()
+def delete_review_comment(number: int) -> dict:
+    """Delete comment X<number> (only when the person asks)."""
+    return fc("delete_review_comment", number=number)
 
 
 # --- sheets -------------------------------------------------------------------

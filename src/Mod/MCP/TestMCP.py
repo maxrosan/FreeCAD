@@ -217,6 +217,66 @@ class TestElectrical(unittest.TestCase):
         self.assertIn("Unknown conductor", reply["error"]["message"])
 
 
+class TestReviewComments(unittest.TestCase):
+    def setUp(self):
+        self.doc = App.newDocument("MCPTestRevisao")
+        call("set_drawing_scale", denominator=50)
+        self.qd = call("insert_electrical_symbol", symbol="quadro_terminal", position=[200, 1500], rotation=90)
+        self.luz = call("insert_electrical_symbol", symbol="ponto_luz_teto", position=[900, 1500])
+        self.longe = call("insert_electrical_symbol", symbol="tomada_baixa", position=[6000, 0])
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def test_target_and_surroundings(self):
+        from freecad_mcp import review
+
+        line = self.doc.getObject(self.qd["group"]).Group[0]
+        c = call("add_review_comment", position=[200, 1500], text="Mover o QDC para perto da porta",
+                 target=line.Name, radius=1000)
+        self.assertEqual(c["number"], 1)
+        self.assertEqual(c["target"]["name"], self.qd["group"])  # the whole symbol, not one line
+        near = [n["name"] for n in c["surroundings_now"]]
+        self.assertEqual(near[0], self.qd["group"])                # nearest first
+        self.assertIn(self.luz["group"], near)                     # the light 700 mm away
+        self.assertNotIn(self.longe["group"], near)                # the socket 6 m away
+        self.assertTrue(any("Ponto de luz" in s for s in c["surroundings_when_created"]))
+        self.assertTrue(review.is_comment(self.doc.getObject(c["name"])))
+
+    def test_status_cycle_and_history(self):
+        call("add_review_comment", position=[200, 1500], text="Primeiro")
+        call("add_review_comment", position=[900, 1500], text="Segundo")
+        self.assertEqual(call("list_review_comments")["counts"], {"Aberto": 2, "Corrigido": 0, "Reaberto": 0})
+        fixed = call("resolve_review_comment", number=1, note="QDC movido")
+        self.assertEqual(fixed["status"], "Corrigido")
+        self.assertIn("Claude: corrigido - QDC movido", fixed["history"][-1])
+        self.assertEqual([c["number"] for c in call("list_review_comments")["comments"]], [2])
+        reply = registry.call("reopen_review_comment", {"number": 2})
+        self.assertIn("not Corrigido", reply["error"]["message"])
+        reopened = call("reopen_review_comment", number=1, reason="ainda longe da porta")
+        self.assertEqual(reopened["status"], "Reaberto")
+        self.assertEqual(len(reopened["history"]), 3)
+        pending = call("list_review_comments")["comments"]
+        self.assertEqual(sorted(c["number"] for c in pending), [1, 2])
+        call("undo")  # the reopening is one undo step
+        self.assertEqual(call("get_review_comment", number=1)["status"], "Corrigido")
+
+    def test_saved_with_the_document_and_kept_off_sheets(self):
+        call("add_review_comment", position=[200, 1500], text="Conferir", target=self.qd["group"])
+        sheet = call("create_sheet")
+        view = self.doc.getObject(sheet["view"])
+        self.assertFalse(any(o.Name == "Revisao" or "Comentario" in o.Name for o in view.Source.ElementList))
+        path = os.path.join(tempfile.mkdtemp(), "revisao.FCStd")
+        self.doc.saveAs(path)
+        App.closeDocument(self.doc.Name)
+        self.doc = App.openDocument(path)
+        App.setActiveDocument(self.doc.Name)
+        c = call("get_review_comment", number=1)
+        self.assertEqual(c["text"], "Conferir")
+        self.assertEqual(c["target"]["name"], self.qd["group"])
+        self.assertEqual(len(c["history"]), 1)
+
+
 class TestSheet(unittest.TestCase):
     def setUp(self):
         self.doc = App.newDocument("MCPTestSheet")
