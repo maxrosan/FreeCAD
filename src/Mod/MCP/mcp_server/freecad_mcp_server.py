@@ -53,6 +53,10 @@ Reproducing a floor plan from a PDF:
 5. get_screenshot and compare with the PDF; get_document_summary to check sizes.
 Each drawing command is one undo step (undo).
 
+Electrical plans (Brazilian NBR 5444 symbols): set_drawing_scale first (e.g. 50), then
+insert_electrical_symbol for outlets, switches, lights and panels, and draw_conduit for the conduits
+with their conductors (fase, neutro, retorno, terra), circuit number and gauge.
+
 Drawing tools take an optional layer (name, created if missing) and style:
 {color: '#rrggbb', line_width: px, draw_style: Solid|Dashed|Dotted|Dashdot, font_size: mm}."""
 
@@ -465,16 +469,67 @@ def make_space(name: str, boundary: list[Point] | None = None, object_name: str 
     return fc("make_space", name=name, boundary=boundary, object_name=object_name, height=height, level=level)
 
 
+# --- electrical plans (NBR 5444) --------------------------------------------------
+
+ElectricalSymbol = Literal[
+    "tomada_baixa", "tomada_media", "tomada_alta", "tomada_piso",
+    "interruptor_simples", "interruptor_simples_2", "interruptor_simples_3",
+    "interruptor_paralelo", "interruptor_intermediario",
+    "ponto_luz_teto", "ponto_luz_teto_embutido", "ponto_luz_parede", "luminaria_fluorescente",
+    "quadro_terminal", "quadro_geral", "caixa_passagem", "botao_campainha",
+    "circuito_sobe", "circuito_desce",
+]
+
+
+@tool()
+def list_electrical_symbols() -> dict:
+    """Electrical plan symbols available (Brazilian NBR 5444 convention) and their parameters."""
+    return fc("list_electrical_symbols")
+
+
+@tool()
+def insert_electrical_symbol(symbol: ElectricalSymbol, position: Point, rotation: float = 0,
+                             letra: str | None = None, circuito: str | int | None = None,
+                             potencia: str | None = None, scale: float | None = None,
+                             layer: str = "Elétrica", label: str | None = None) -> dict:
+    """Insert an NBR 5444 symbol in a floor plan, sized for the drawing scale (set_drawing_scale; or
+    `scale` N for 1:N).
+
+    Wall symbols (tomadas, ponto_luz_parede) start at `position` on the wall face and point along
+    `rotation` (degrees; 0 = +X) into the room. letra: command letter (switches: 'a', or 'ab'/'abc'
+    for 2/3 sections; lights: the switch letter that commands them); circuito: circuit number;
+    potencia: '300VA', '2x100W'... Switches: simples = empty circle, paralelo = filled,
+    intermediario = half filled."""
+    return fc("insert_electrical_symbol", symbol=symbol, position=position, rotation=rotation, letra=letra,
+              circuito=circuito, potencia=potencia, scale=scale, layer=layer, label=label)
+
+
+@tool()
+def draw_conduit(points: list[Point], installation: Literal["teto", "parede", "piso"] = "teto",
+                 diameter: str | int | None = None,
+                 conductors: list[Literal["fase", "neutro", "retorno", "terra"]] | None = None,
+                 circuit: str | int | None = None, gauge: str | float | None = None, marks_at: float = 0.5,
+                 scale: float | None = None, layer: str = "Elétrica", label: str | None = None) -> dict:
+    """Conduit (eletroduto) along points in mm: solid in ceiling/wall, dashed in the floor. The conductors
+    inside are marked across it at `marks_at` (0..1 of the length) per NBR 5444: fase crosses the
+    line, neutro crosses with a flag, retorno and terra (T) stand on one side; with the circuit number
+    above and the gauge in mm² below (e.g. 2.5)."""
+    return fc("draw_conduit", points=points, installation=installation, diameter=diameter,
+              conductors=conductors, circuit=circuit, gauge=gauge, marks_at=marks_at, scale=scale,
+              layer=layer, label=label)
+
+
 # --- sheets -------------------------------------------------------------------
 
 
 @tool()
 def create_sheet(sheet: Literal["auto", "A4", "A3", "A2", "A1", "A0"] = "auto", scale: float | None = None,
-                 objects: list[str] | None = None, title: str | None = None) -> dict:
+                 objects: list[str] | None = None, title: str | None = None, text_height: float = 2.5) -> dict:
     """A TechDraw sheet with the drawing at 1:scale (default: the document drawing scale, else the largest
     standard scale that fits). sheet "auto" picks the smallest landscape ISO sheet that fits.
-    objects: what to draw (default every layer, level and loose visible object)."""
-    return fc("create_sheet", sheet=sheet, scale=scale, objects=objects, title=title)
+    objects: what to draw (default every layer, level and loose visible object).
+    text_height: paper height (mm) of every text on the sheet (the sheet uses one size for all texts)."""
+    return fc("create_sheet", sheet=sheet, scale=scale, objects=objects, title=title, text_height=text_height)
 
 
 @tool()

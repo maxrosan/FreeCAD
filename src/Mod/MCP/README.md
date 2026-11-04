@@ -50,6 +50,12 @@ starts FreeCAD outside that tree (through WMI if needed), so the drawing stays o
   `draw_dimension`, `draw_batch`, layers and styles.
 * 3D (BIM): `make_level`, `make_wall`, `make_walls`, `make_walls_from_objects`, `add_opening`
   (doors and windows hosted in walls), `make_space` (rooms with area).
+* Electrical plans: `insert_electrical_symbol` and `draw_conduit`, with the symbols of the
+  Brazilian NBR 5444 (outlets low/mid/high and in the floor, switches simple/two-way/intermediate,
+  ceiling/wall/fluorescent lights, panels, junction box, bell button, rising/falling circuits)
+  and the conductor marks (fase, neutro, retorno, terra). Symbols are data in
+  `freecad_mcp/handlers/electrical.py`, in paper mm, scaled by the drawing scale on insertion.
+  NBR 5444 was cancelled in 2014 without replacement; its symbols are still the ones in use.
 * Sheets (TechDraw): `create_sheet` (ISO A4 to A0 at a scale), `export_sheet` (PDF, SVG, DXF),
   `export_model` (DXF, IFC, STEP...).
 * PDF: `pdf_info`, `pdf_render_page`, `pdf_extract`, `pdf_calibrate`, `pdf_set_context`,

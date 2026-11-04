@@ -78,6 +78,6 @@ def _load_handlers():
     global _loaded
     if _loaded:
         return
-    from .handlers import bim3d, document, draft2d, python, techdraw, view  # noqa: F401
+    from .handlers import bim3d, document, draft2d, electrical, python, techdraw, view  # noqa: F401
 
     _loaded = True

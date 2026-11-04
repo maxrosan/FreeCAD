@@ -159,6 +159,64 @@ class TestBim(unittest.TestCase):
         self.assertAlmostEqual(space["area_m2"], 5.85 * 5.85, places=2)
 
 
+class TestElectrical(unittest.TestCase):
+    def setUp(self):
+        self.doc = App.newDocument("MCPTestEletrica")
+        call("set_drawing_scale", denominator=50)
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def _box(self, group):
+        grp = self.doc.getObject(group)
+        box = None
+        for obj in grp.Group:
+            shape = getattr(obj, "Shape", None)
+            if shape is None or shape.isNull():
+                continue
+            if box is None:
+                box = App.BoundBox(shape.BoundBox)
+            else:
+                box.add(shape.BoundBox)
+        return box
+
+    def test_every_symbol(self):
+        from freecad_mcp.handlers.electrical import SYMBOLS
+
+        for i, name in enumerate(SYMBOLS):
+            res = call("insert_electrical_symbol", symbol=name, position=[i * 1000, 0], letra="a",
+                       circuito=3, potencia="100VA")
+            self.assertGreater(res["objects"], 1, name)
+            self.assertEqual(res["scale"], "1:50")
+        self.assertIn("Unknown symbol", registry.call("insert_electrical_symbol",
+                                                      {"symbol": "nada", "position": [0, 0]})["error"]["message"])
+
+    def test_size_follows_the_drawing_scale(self):
+        res = call("insert_electrical_symbol", symbol="ponto_luz_teto", position=[2000, 1500])
+        box = self._box(res["group"])
+        self.assertAlmostEqual(box.XLength, 5.0 * 50, places=3)  # Ø5 mm on paper at 1:50
+        self.assertAlmostEqual(box.Center.x, 2000, places=3)
+        res = call("insert_electrical_symbol", symbol="ponto_luz_teto", position=[0, 0], scale=100)
+        self.assertAlmostEqual(self._box(res["group"]).XLength, 500, places=3)
+
+    def test_wall_symbol_points_into_the_room(self):
+        # a socket on a wall at y = 0, the room on +Y
+        res = call("insert_electrical_symbol", symbol="tomada_baixa", position=[1000, 0], rotation=90)
+        box = self._box(res["group"])
+        self.assertAlmostEqual(box.YMax, (2.0 + 2.4) * 50, places=3)  # stem + triangle
+        self.assertAlmostEqual(box.YMin, -0.5 * 50, places=3)         # wall mark behind the wall face
+
+    def test_conduit_with_conductors(self):
+        res = call("draw_conduit", points=[[0, 0], [3000, 0], [3000, 2000]], installation="piso",
+                   conductors=["fase", "neutro", "terra"], circuit=2, gauge=2.5, diameter=25)
+        self.assertEqual(res["length_mm"], 5000.0)
+        names = [o.TypeId for o in self.doc.getObject(res["group"]).Group]
+        # wire + fase (1) + neutro (2) + terra (2) lines, and 3 texts
+        self.assertEqual(len(names), 1 + 1 + 2 + 2 + 3)
+        reply = registry.call("draw_conduit", {"points": [[0, 0], [1, 0]], "conductors": ["xyz"]})
+        self.assertIn("Unknown conductor", reply["error"]["message"])
+
+
 class TestSheet(unittest.TestCase):
     def setUp(self):
         self.doc = App.newDocument("MCPTestSheet")

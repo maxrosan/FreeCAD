@@ -13,6 +13,7 @@ SET(MCP_SRCS
     freecad_mcp/handlers/common.py
     freecad_mcp/handlers/document.py
     freecad_mcp/handlers/draft2d.py
+    freecad_mcp/handlers/electrical.py
     freecad_mcp/handlers/bim3d.py
     freecad_mcp/handlers/techdraw.py
     freecad_mcp/handlers/python.py

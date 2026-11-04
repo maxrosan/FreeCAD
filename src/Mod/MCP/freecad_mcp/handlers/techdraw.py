@@ -85,12 +85,14 @@ def _fit_scale(box, size):
 
 
 @command("create_sheet", transaction=True)
-def create_sheet(sheet="auto", scale=None, objects=None, title=None, line_width=0.35, font_size=3.5):
+def create_sheet(sheet="auto", scale=None, objects=None, title=None, line_width=0.35, text_height=2.5):
     """A TechDraw page with the drawing at scale 1:N.
 
     sheet: A4..A0 (landscape) or "auto" (smallest that fits at the scale).
     scale: N for 1:N; defaults to the document drawing scale, else the largest standard scale that fits.
     objects: names to draw; default all layers, levels and loose visible objects.
+    text_height: height of the texts on paper (mm). The Draft view draws every text at this one
+    size, whatever the size of each text in the model.
     """
     doc = active_document(create=False)
     sources = _sources(doc, objects)
@@ -136,7 +138,7 @@ def create_sheet(sheet="auto", scale=None, objects=None, title=None, line_width=
     view.ScaleType = "Custom"
     view.Scale = 1 / scale
     view.LineWidth = float(line_width)
-    view.FontSize = float(font_size)
+    view.FontSize = 2.0 * float(text_height)  # Draft's get_svg draws texts at half of FontSize
     page.addView(view)
     # X, Y is the centre of the view; put it in the middle of the free area (after addView,
     # which centres new views on the page).
