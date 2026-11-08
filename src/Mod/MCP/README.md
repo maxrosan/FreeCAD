@@ -50,12 +50,12 @@ starts FreeCAD outside that tree (through WMI if needed), so the drawing stays o
   `draw_dimension`, `draw_batch`, layers and styles.
 * 3D (BIM): `make_level`, `make_wall`, `make_walls`, `make_walls_from_objects`, `add_opening`
   (doors and windows hosted in walls), `make_space` (rooms with area).
-* Electrical plans: `insert_electrical_symbol` and `draw_conduit`, with the symbols of the
-  Brazilian NBR 5444 (outlets low/mid/high and in the floor, switches simple/two-way/intermediate,
-  ceiling/wall/fluorescent lights, panels, junction box, bell button, rising/falling circuits)
-  and the conductor marks (fase, neutro, retorno, terra). Symbols are data in
-  `freecad_mcp/handlers/electrical.py`, in paper mm, scaled by the drawing scale on insertion.
-  NBR 5444 was cancelled in 2014 without replacement; its symbols are still the ones in use.
+* Electrical plans, through the Electrical module (`src/Mod/Electrical`, the "Elétrica"
+  workbench): `insert_electrical_symbol` and `set_electrical_item` (NBR 5444 items that carry
+  power, circuit and room), `create_circuit`/`set_circuit` (single-phase 220 V, two- and
+  three-phase 380 V), `draw_conduit` (conductor marks from its circuits), `load_summary`,
+  `rebalance_phases`, `check_installation` (basic NBR 5410), `create_electrical_sheets` (plan and
+  load-schedule pages that update themselves) and `set_installation` (380/220 V by default).
 * Review comments: the **X** button (File toolbar and Tools menu of every workbench) pins a
   comment where you click next: a dot with "X<n>: text", red when open, green when fixed,
   orange when reopened. Each comment records the object under the click, what was around it

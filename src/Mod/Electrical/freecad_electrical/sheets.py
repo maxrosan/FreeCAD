@@ -203,9 +203,15 @@ def make_schedule_page(doc, title="Quadro de cargas", sheet="A3"):
     table.Source = sched.Sheet
     table.CellStart = "A1"
     table.CellEnd = sched.LastCell or "N5"
-    table.TextSize = 3.0
     page.addView(table)
     x0, y0, x1, y1 = drawing_area(size)
+    # The view draws column widths and text sizes in pixels at 96 dpi: scale the table to the
+    # free width, and size the text so it prints 2.5 mm high.
+    px_mm = 25.4 / 96
+    scale = (x1 - x0) / (float(sum(model.WIDTHS)) * px_mm)
+    table.ScaleType = "Custom"
+    table.Scale = scale
+    table.TextSize = 2.5 / (px_mm * scale)
     table.X, table.Y = (x0 + x1) / 2, (y0 + y1) / 2 + 20
     doc.recompute()
     return page, table

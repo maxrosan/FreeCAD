@@ -146,6 +146,16 @@ class TestModel(unittest.TestCase):
         self.assertEqual(len(c2.Phases), 2)
         self.assertIn(2, changes)
 
+    def test_schedule_follows_later_changes(self):
+        p = model.make_point(self.doc, "tomada_baixa", App.Vector(0, 0, 0), circuit=1)
+        sheet = model.schedule(self.doc).Sheet
+        self.doc.recompute()
+        self.assertEqual(sheet.get("G5"), 100)
+        model.set_point(p, power=450)  # a change after the schedule exists
+        self.doc.recompute()
+        self.assertEqual(sheet.get("G5"), 450)
+        self.assertIn(model.find_circuit(self.doc, 1), model.schedule(self.doc).OutList)
+
     def test_conduit_marks_follow_the_circuits(self):
         model.make_circuit(self.doc, 1, "Tomadas", "TUG", calc.MONO)
         model.make_circuit(self.doc, 2, "Motor", "Motor", calc.TRI)

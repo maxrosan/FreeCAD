@@ -569,6 +569,7 @@ def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diamet
 HEADER = ["Circuito", "Descrição", "Tipo", "Ligação", "Fases", "Itens", "Potência (VA)", "Potência (W)",
           "Corrente (A)", "Disjuntor (A)", "Seção (mm²)", "R (VA)", "S (VA)", "T (VA)"]
 COLUMNS = "ABCDEFGHIJKLMN"
+WIDTHS = (60, 170, 80, 120, 50, 45, 90, 90, 80, 80, 80, 70, 70, 70)  # spreadsheet column widths
 
 
 class LoadSchedule(_Proxy):
@@ -577,9 +578,23 @@ class LoadSchedule(_Proxy):
     def __init__(self, obj):
         obj.Proxy = self
         obj.addProperty("App::PropertyLink", "Sheet", "Quadro de cargas", "Planilha preenchida")
-        obj.addProperty("App::PropertyLinkListHidden", "Circuits", "Quadro de cargas", "Circuitos")
+        self._add_circuits(obj)
         obj.addProperty("App::PropertyString", "LastCell", "Quadro de cargas", "Última célula usada")
         obj.setEditorMode("LastCell", 1)
+
+    @staticmethod
+    def _add_circuits(obj, links=()):
+        # A plain link list: hidden link lists do not count as dependencies, and the schedule
+        # must be recomputed after its circuits. It is only hidden from the property editor.
+        obj.addProperty("App::PropertyLinkList", "Circuits", "Quadro de cargas", "Circuitos")
+        obj.Circuits = list(links)
+        obj.setEditorMode("Circuits", 2)
+
+    def onDocumentRestored(self, obj):
+        if obj.getTypeIdOfProperty("Circuits") == "App::PropertyLinkListHidden":  # files from before
+            links = list(obj.Circuits)
+            obj.removeProperty("Circuits")
+            self._add_circuits(obj, links)
 
     def execute(self, obj):
         sheet = obj.Sheet
@@ -619,7 +634,7 @@ class LoadSchedule(_Proxy):
             sheet.setStyle("A1:N1", "bold")
             sheet.setStyle(f"A4:N4", "bold")
             sheet.setStyle(f"A{r - 2}:N{r - 2}", "bold")
-            for col, width in zip(COLUMNS, (60, 170, 80, 120, 50, 45, 90, 90, 80, 80, 80, 70, 70, 70)):
+            for col, width in zip(COLUMNS, WIDTHS):
                 sheet.setColumnWidth(col, width)
         except Exception:
             pass

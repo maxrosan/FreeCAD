@@ -77,7 +77,10 @@ def check(doc):
     for room in room_list:
         members = by_room[id(room)]
         lights = [p for p in members if SYMBOLS[p.Symbol].kind == "Iluminação"]
-        sockets = [p for p in members if SYMBOLS[p.Symbol].kind == "TUG"]
+        # general-use sockets: socket symbols whose circuit is a TUG one (a shower outlet on a TUE
+        # circuit uses the same symbol but is not a general-use socket)
+        sockets = [p for p in members if SYMBOLS[p.Symbol].kind == "TUG"
+                   and (p.Circuit is None or p.Circuit.Kind == "TUG")]
         light_va = sum(p.PowerVA for p in lights)
         min_light = calc.min_lighting_va(room["area_m2"])
         min_count = calc.min_sockets(room["category"], room["area_m2"], room["perimeter_m"])

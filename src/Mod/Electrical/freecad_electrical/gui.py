@@ -3,14 +3,13 @@
 """GUI of the Electrical workbench: view providers, data panels and commands."""
 
 import json
-import math
 import os
 
 import FreeCAD as App
 import FreeCADGui as Gui
 
 from . import calc, checks, geometry, model, sheets
-from .symbols import CATEGORIES, CONDUCTORS, SYMBOLS
+from .symbols import CATEGORIES, SYMBOLS
 
 PARAMS = "User parameter:BaseApp/Preferences/Mod/Electrical"
 BLACK = (0.0, 0.0, 0.0)
