@@ -257,12 +257,14 @@ class ViewProvider3D(_ViewProvider):
         materials = []
         cache = {}
         for c in colors:
-            key = tuple(round(x, 4) for x in c[:3])
+            key = tuple(round(x, 4) for x in c[:4])
             m = cache.get(key)
             if m is None:
                 m = App.Material()
-                m.DiffuseColor = key + (0.0,)
-                m.AmbientColor = tuple(x * 0.4 for x in key) + (0.0,)
+                m.DiffuseColor = key[:3] + (0.0,)
+                m.AmbientColor = tuple(x * 0.4 for x in key[:3]) + (0.0,)
+                if len(key) > 3 and key[3] > 0:
+                    m.Transparency = key[3]  # the forro
                 cache[key] = m
             materials.append(m)
         try:

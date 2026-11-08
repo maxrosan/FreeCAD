@@ -49,7 +49,9 @@ Building electrical plans in FreeCAD, Brazilian conventions:
   the keyboard (W/S or arrows walk, A/D sideways, Left/Right turn, R/F look up/down, Shift
   faster, Esc ends), stopped by the walls; PageUp/PageDown or the buttons of its window go to the
   floor above/below. While walking, the floors above, the BIM rooms and the plan symbols are
-  hidden and the 3D shows only that floor; all comes back at the end.
+  hidden and the 3D shows only that floor, with a translucent forro under each room's ceiling;
+  all comes back at the end. With the mouse in the 3D view, drag to look around and roll the
+  wheel to walk.
 * **Legible plans.** Texts are filled glyphs without an outline (an outline makes small text look
   bold), in the 3D view and on sheets. The power and circuit of each item, and the conductor
   marks of each conduit, go where they overlap the least: around the symbol, along the conduit or

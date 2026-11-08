@@ -47,6 +47,8 @@ PLATE_COLOR = (0.95, 0.95, 0.95)
 LAMP_COLOR = (1.0, 0.85, 0.25)
 PANEL_COLOR = (0.80, 0.80, 0.82)
 CONCRETE = (0.62, 0.62, 0.60)
+CEILING_COLOR = (0.96, 0.96, 0.94, 0.8)  # with its transparency: the conduits above show through
+FORRO_THICKNESS = 10.0
 
 
 # Kelly's colours of maximum contrast (without white and black), and a few more: circuits up to
@@ -81,13 +83,14 @@ def _diameter(text, default=20.0):
 class _Model:
     """Collects the solids and their colours."""
 
-    def __init__(self, doc, only=None, floor=None):
+    def __init__(self, doc, only=None, floor=None, ceiling=False):
         import Part
 
         self.Part = Part
         self.doc = doc
         self.only = {int(n) for n in only} if only else None  # circuit numbers shown (None: all)
         self.floor = floor  # elevation of the only floor shown (None: all)
+        self.with_ceiling = ceiling  # a translucent forro under each room's ceiling
         self.net = network.network(doc)
         self.ceiling = self.net.ceiling
         self.solids = []      # (solid, colour)
@@ -421,10 +424,27 @@ class _Model:
             except Exception:
                 self.solids.append((Part.makeSphere(r, mid), color))  # keep the run closed
 
+    def ceilings(self):
+        """The forro of each room: its floor outline at the ceiling height, translucent (the
+        conduits run above it)."""
+        for o in self.doc.Objects:
+            if getattr(o, "IfcType", "") != "Space":
+                continue
+            shape = getattr(o, "Shape", None)
+            if shape is None or shape.isNull() or not self.on_floor(shape.BoundBox.ZMin):
+                continue
+            bottom = [f for f in shape.Faces if abs(f.BoundBox.ZMax - shape.BoundBox.ZMin) < 1e-3]
+            for face in bottom:
+                forro = face.copy()
+                forro.translate(App.Vector(0, 0, self.ceiling))
+                self.solids.append((forro.extrude(App.Vector(0, 0, FORRO_THICKNESS)), CEILING_COLOR))
+
     def build(self):
         self.runs()
         self.drops()
         self.tubes()
+        if self.with_ceiling:
+            self.ceilings()
         return self.solids
 
 
@@ -577,6 +597,9 @@ class Installation3D(model._Proxy):
         if "VisibleFloor" not in obj.PropertiesList:
             obj.addProperty("App::PropertyString", "VisibleFloor", "Instalação 3D",
                             "Cota (mm) do único andar mostrado, no passeio (vazio: todos)")
+        if "ShowCeiling" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyBool", "ShowCeiling", "Instalação 3D",
+                            "Forro translúcido no teto de cada cômodo")
 
     def onDocumentRestored(self, obj):
         self._visible(obj)
@@ -593,7 +616,7 @@ class Installation3D(model._Proxy):
             floor = float(floor) if floor else None
         except ValueError:
             floor = None
-        built = _Model(obj.Document, only, floor)
+        built = _Model(obj.Document, only, floor, bool(getattr(obj, "ShowCeiling", False)))
         built.build()
         shape, colors = build(obj.Document, built)
         obj.Shape = shape

@@ -3,7 +3,8 @@
 """Walking inside the model: the view of a person standing on a floor, moved with the keyboard.
 
 W/S or Up/Down walk, A/D step sideways, Left/Right turn, R/F look up/down, PageUp/PageDown go
-to the floor above/below, Shift walks faster, Esc ends the walk. Walls stop the person unless
+to the floor above/below, Shift walks faster, Esc ends the walk. With the mouse in the 3D view:
+drag to look around, the wheel walks forward and back. Walls stop the person unless
 "atravessar paredes" is on. While walking, the other floors, the BIM rooms (volumes that would
 fill the view) and the plan symbols can be hidden; everything is shown again at the end, and
 the camera goes back to where it was.
@@ -24,6 +25,7 @@ TURN = 10.0       # degrees per key press
 LOOK = 8.0        # degrees per key press, up or down
 RADIUS = 250.0    # mm: how close to a wall the person gets
 FOV = 60.0        # degrees, vertical field of view
+DRAG = 0.25       # degrees of turn per pixel dragged
 
 
 # --- geometry (no GUI) --------------------------------------------------------------------------
@@ -153,8 +155,11 @@ class Walk:
         self.only_this_floor = True
         self.hide_rooms = True
         self.hide_plan = True
+        self.show_ceiling = True
+        self._dragging = None
         self._walls = {}
         self._visibility = {}
+        self._ceiling_before = None  # the 3D's forro setting before the walk
         self._saved = None
         self._filter = None
         self.panel = None
@@ -229,9 +234,17 @@ class Walk:
         obj = model3d.model3d(self.doc, create=False)
         if obj is None or "VisibleFloor" not in obj.PropertiesList:
             return
+        if self._ceiling_before is None and "ShowCeiling" in obj.PropertiesList:
+            self._ceiling_before = obj.ShowCeiling
         value = "" if z is None else f"{z:g}"
-        if obj.VisibleFloor != value:
+        ceiling = self._ceiling_before if z is None else self.show_ceiling
+        changed = obj.VisibleFloor != value
+        if changed:
             obj.VisibleFloor = value
+        if "ShowCeiling" in obj.PropertiesList and ceiling is not None and obj.ShowCeiling != bool(ceiling):
+            obj.ShowCeiling = bool(ceiling)
+            changed = True
+        if changed:
             obj.recompute()
             self._refresh_clipping()
 
@@ -305,6 +318,18 @@ class Walk:
         self.pitch = max(-80.0, min(80.0, self.pitch + degrees))
         self.place()
 
+    def drag(self, dx, dy):
+        """Mouse dragged by (dx, dy) pixels: turn and look like a head (right turns right)."""
+        self.yaw = (self.yaw - dx * DRAG) % 360.0
+        self.pitch = max(-80.0, min(80.0, self.pitch - dy * DRAG))
+        self.place()
+
+    def wheel(self, steps, fast=False):
+        """Mouse wheel: walk forward (positive) or back."""
+        for _ in range(abs(int(steps))):
+            if not self.move(1 if steps > 0 else -1, 0, fast):
+                break
+
     def go_floor(self, step):
         index = self.index + step
         if not 0 <= index < len(self.floors):
@@ -352,11 +377,46 @@ class Walk:
     def _install_keys(self):
         from PySide import QtCore, QtWidgets
 
+        def Gui_main():
+            import FreeCADGui as Gui
+
+            return Gui.getMainWindow()
+
         walk = self
+
+        mdi = Gui_main().findChild(QtWidgets.QMdiArea)
+        sub = mdi.activeSubWindow() if mdi is not None else None
+        view_widget = sub.widget() if sub is not None else None
+        E = QtCore.QEvent
+
+        def point(event):
+            pos = event.position() if hasattr(event, "position") else event.pos()
+            return pos.x(), pos.y()
 
         class Keys(QtCore.QObject):
             def eventFilter(self, obj, event):
-                if event.type() != QtCore.QEvent.KeyPress or Walk.current is not walk:
+                if Walk.current is not walk:
+                    return False
+                kind = event.type()
+                if kind in (E.MouseButtonPress, E.MouseMove, E.MouseButtonRelease, E.MouseButtonDblClick, E.Wheel):
+                    if view_widget is None or not isinstance(obj, QtWidgets.QWidget) or \
+                            not (obj is view_widget or view_widget.isAncestorOf(obj)):
+                        return False  # the mouse is elsewhere (the walk window, a menu)
+                    if kind == E.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
+                        walk._dragging = point(event)
+                    elif kind == E.MouseMove and walk._dragging is not None:
+                        x, y = point(event)
+                        walk.drag(x - walk._dragging[0], y - walk._dragging[1])
+                        walk._dragging = (x, y)
+                    elif kind == E.MouseButtonRelease:
+                        walk._dragging = None
+                    elif kind == E.Wheel:
+                        notches = event.angleDelta().y() / 120.0
+                        if notches:
+                            shift = bool(event.modifiers() & QtCore.Qt.ShiftModifier)
+                            walk.wheel(round(notches) or (1 if notches > 0 else -1), shift)
+                    return True  # the view's own navigation stays still while walking
+                if kind != E.KeyPress:
                     return False
                 focus = QtWidgets.QApplication.focusWidget()
                 if isinstance(focus, (QtWidgets.QLineEdit, QtWidgets.QAbstractSpinBox, QtWidgets.QTextEdit,
@@ -393,6 +453,7 @@ class Walk:
         for text, attr in (("Só este andar (esconde os de cima)", "only_this_floor"),
                            ("Esconder os cômodos (volumes BIM)", "hide_rooms"),
                            ("Esconder os símbolos da planta", "hide_plan"),
+                           ("Mostrar o forro (translúcido)", "show_ceiling"),
                            ("Atravessar paredes", "through_walls")):
             box = QtWidgets.QCheckBox(text)
             box.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -401,7 +462,8 @@ class Walk:
             layout.addWidget(box)
         help_text = QtWidgets.QLabel(
             "W/S ou ↑/↓: andar · A/D: de lado · ←/→: virar · R/F: olhar para cima/baixo\n"
-            "PageUp/PageDown: andar de cima/de baixo · Shift: mais rápido · Esc: sair")
+            "PageUp/PageDown: andar de cima/de baixo · Shift: mais rápido · Esc: sair\n"
+            "Mouse na vista: arraste para olhar em volta, roda para andar")
         help_text.setWordWrap(True)
         layout.addWidget(help_text)
         leave = QtWidgets.QPushButton("Sair do passeio")

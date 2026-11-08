@@ -728,3 +728,30 @@ class TestWalk(unittest.TestCase):
         obj.VisibleFloor = ""
         self.doc.recompute()
         self.assertAlmostEqual(obj.Shape.BoundBox.ZMin, everything.ZMin, places=3)
+
+    def test_translucent_forro(self):
+        import Arch
+        import Draft
+        from freecad_electrical import model3d
+
+        _house(self.doc)
+        rect = Draft.make_rectangle(4000, 3000)
+        volume = self.doc.addObject("Part::Extrusion", "SpaceVolume")
+        volume.Base = rect
+        volume.Dir = App.Vector(0, 0, 2800)
+        volume.Solid = True
+        self.doc.recompute()
+        space = Arch.makeSpace(volume)
+        self.doc.recompute()
+        if space.Shape.isNull():
+            self.skipTest("the space has no shape here")
+        obj = model3d.model3d(self.doc)
+        self.doc.recompute()
+        before = len(obj.Shape.Solids)
+        obj.ShowCeiling = True
+        self.doc.recompute()
+        forro = [s for s in obj.Shape.Solids if abs(s.BoundBox.ZMin - (space.Shape.BoundBox.ZMin + 2800)) < 1e-3
+                 and abs(s.BoundBox.ZLength - model3d.FORRO_THICKNESS) < 1e-3]
+        self.assertTrue(forro)
+        self.assertEqual(len(obj.Shape.Solids), before + len(forro))
+        self.assertTrue(any(abs(c[3] - model3d.CEILING_COLOR[3]) < 0.01 for c in obj.FaceColors))  # translucent
