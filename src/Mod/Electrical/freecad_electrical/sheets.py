@@ -88,8 +88,22 @@ class SheetContent:
         return None
 
 
-def sources(doc):
-    """What a sheet draws: layers, levels and groups as a whole, plus loose visible objects."""
+def _consumed(obj):
+    """Used by another object as its base (the outline of a wall or a room): drawn by that one."""
+    for user in obj.InList:
+        if user.TypeId.startswith("TechDraw::") or is_content(user) or _type(user) in (
+                "ReviewComment", "Layer", "LayerContainer", "BuildingPart") \
+                or user.isDerivedFrom("App::DocumentObjectGroup"):
+            continue
+        return True
+    return False
+
+
+def sources(doc, keep=()):
+    """What a sheet draws: layers, levels and groups as a whole, plus loose visible objects. Objects
+    in `keep` (already on the sheet) stay even when hidden in the 3D view, unless another object
+    now uses them as its base: hiding walls to look at the installation must not take them off
+    the plan."""
     from draftobjects.layer import get_layer
 
     def has_parent(o):
@@ -111,7 +125,8 @@ def sources(doc):
         if has_parent(obj) or get_layer(obj) is not None:
             continue  # drawn through its layer, level or group
         if kind != "BuildingPart" and not obj.isDerivedFrom("App::DocumentObjectGroup") \
-                and App.GuiUp and obj.ViewObject and not obj.ViewObject.Visibility:
+                and App.GuiUp and obj.ViewObject and not obj.ViewObject.Visibility \
+                and (obj.Name not in keep or _consumed(obj)):
             continue
         found.append(obj)
     return _electrical_last(found)
@@ -138,9 +153,9 @@ def floor_ranges(doc):
     return out
 
 
-def floor_sources(doc, zmin, zmax):
+def floor_sources(doc, zmin, zmax, keep=()):
     """What a sheet of one floor draws: the objects starting between zmin and zmax, taken out of
-    their groups, levels and layers (a group may span several floors)."""
+    their groups, levels and layers (a group may span several floors). `keep`: see sources."""
     found, seen = [], set()
 
     def walk(obj):
@@ -158,7 +173,7 @@ def floor_sources(doc, zmin, zmax):
         if z is not None and zmin <= z < zmax:
             found.append(obj)
 
-    for obj in sources(doc):
+    for obj in sources(doc, keep):
         walk(obj)
     return _electrical_last(found)
 
@@ -222,9 +237,10 @@ def _page(doc, name, label, sheet):
 
 
 def _content_sources(doc, content):
+    keep = {o.Name for o in getattr(content, "ElementList", []) or []}
     if getattr(content, "FloorMax", 0.0) > getattr(content, "FloorMin", 0.0):
-        return floor_sources(doc, content.FloorMin, content.FloorMax)
-    return sources(doc)
+        return floor_sources(doc, content.FloorMin, content.FloorMax, keep)
+    return sources(doc, keep)
 
 
 def make_content(doc, objs=None, label="Conteúdo da folha", floor=None):

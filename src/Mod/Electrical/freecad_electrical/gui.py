@@ -478,10 +478,14 @@ class _PlacingSession:
         save_last(self.symbol, values)
         kwargs = self.form.kwargs()
         position, rotation = point, values.get("rotation", 0.0)
-        if SYMBOLS[self.symbol].wall:
+        sym = SYMBOLS[self.symbol]
+        if sym.wall or sym.beside:
             found = nearest_wall(self.doc, point)
             if found is not None:
                 position, rotation = found
+                if sym.beside:  # on the wall, drawn beside it: the circle touches the wall face
+                    d = App.Rotation(App.Vector(0, 0, 1), rotation).multVec(App.Vector(1, 0, 0))
+                    position = position + d * (sym.beside * model.scale_of(self.doc))
         self.doc.openTransaction(f"Inserir {SYMBOLS[self.symbol].label}")
         try:
             model.make_point(self.doc, self.symbol, position, rotation, **kwargs)

@@ -91,6 +91,7 @@ class _Model:
         self.ceiling = self.net.ceiling
         self.solids = []      # (solid, colour)
         self.segments = []    # [p, q, diameter, colour]: tubes before the bends are cut in
+        self._walls = None    # vertical faces of the BIM walls
         self.flat = []        # for the isometric page: ("line", [points], diameter, colour),
         #                       ("poly", [points], colour), ("circle", centre, radius, colour)
 
@@ -206,6 +207,61 @@ class _Model:
         width = max(300.0, min(ways, 24) * 18.0 + 120.0)
         return width, 300.0 + 150.0 * rows, 100.0
 
+    def wall_faces(self):
+        if self._walls is None:
+            self._walls = []
+            for o in self.doc.Objects:
+                if getattr(o, "IfcType", "") != "Wall":
+                    continue
+                shape = getattr(o, "Shape", None)
+                if shape is None or shape.isNull():
+                    continue
+                for f in shape.Faces:
+                    try:
+                        n = f.normalAt(*f.Surface.parameter(f.CenterOfMass))
+                    except Exception:
+                        continue
+                    if abs(n.z) < 0.05 and "Plane" in type(f.Surface).__name__:
+                        self._walls.append(f)
+        return self._walls
+
+    def wall_at(self, point, reach):
+        """(foot on the face, normal out of the wall toward `point`) of the wall face nearest to
+        `point` within `reach` mm, at its height; None if there is none."""
+        vertex = self.Part.Vertex(point)
+        best = None
+        for f in self.wall_faces():
+            box = f.BoundBox
+            if not (box.ZMin - 1 <= point.z <= box.ZMax + 1):
+                continue
+            if box.XMin - reach > point.x or box.XMax + reach < point.x or \
+                    box.YMin - reach > point.y or box.YMax + reach < point.y:
+                continue
+            d, pairs, _ = f.distToShape(vertex)
+            if d <= reach and (best is None or d < best[0]):
+                foot = pairs[0][0]
+                n = f.normalAt(*f.Surface.parameter(foot))
+                n = App.Vector(n.x, n.y, 0)
+                if n.Length < 1e-9:
+                    continue
+                n.normalize()
+                best = (d, foot, n)
+        if best is None:
+            return None
+        d, foot, n = best
+        if (point - foot).dot(n) < -1e-6:
+            n = -n
+        return App.Vector(foot.x, foot.y, point.z), n
+
+    def mount(self, p, z, fallback_dir):
+        """Where a wall-mounted item's box goes: (face point, normal into the room) of the wall
+        nearest to it, or its own position and direction when no BIM wall is near."""
+        reach = max(400.0, 10.0 * model.scale_of(self.doc))
+        found = self.wall_at(App.Vector(p.Position.x, p.Position.y, z), reach)
+        if found is not None:
+            return found
+        return App.Vector(p.Position.x, p.Position.y, z), fallback_dir
+
     def _frame(self, p):
         d = App.Rotation(App.Vector(0, 0, 1), float(p.Rotation.Value)).multVec(App.Vector(1, 0, 0))
         return d, App.Vector(-d.y, d.x, 0)
@@ -224,8 +280,10 @@ class _Model:
             return self.entrance(p)
         if p.Symbol in network.PANELS:
             w, bh, depth = self._panel_size(p)
-            centre = App.Vector(base.x, base.y, floor + (h or 1500.0))
-            self.box(centre, d, w, depth, bh, PANEL_COLOR)  # along the symbol, into the wall
+            z = floor + (h or 1500.0)
+            face, normal = self.mount(p, z, App.Vector(-n.x, -n.y, 0))
+            centre = face - normal * (depth / 2)  # flush with the wall face, into the wall
+            self.box(centre, App.Vector(-normal.y, normal.x, 0), w, depth, bh, PANEL_COLOR)
             return centre, bh / 2
         if sym.category == "Iluminação" and not sym.wall:
             # octagonal 4x4 box on the ceiling (above the forro) and the lamp below it
@@ -240,12 +298,15 @@ class _Model:
             return centre, BOX_44[2] / 2
         width, height, depth = BOX_44 if p.Symbol in ("caixa_passagem", "motor") else BOX_42
         z = floor + (h if h > 0 else 300.0)
-        if sym.wall:
-            # the symbol points into the room: the box goes behind the wall face, the plate on it
-            centre = App.Vector(base.x, base.y, z) - d * (depth / 2 + WALL_INSET)
-            self.box(centre, n, width, depth, height, BOX_COLOR)
-            plate = App.Vector(base.x, base.y, z) + d * (PLATE[2] / 2)
-            self.box(plate, n, PLATE[0], PLATE[2], PLATE[1], PLATE_COLOR)
+        if sym.wall or sym.beside:
+            # in the nearest wall: the box behind its face, the plate on it
+            face, normal = self.mount(p, z, d)
+            along = App.Vector(-normal.y, normal.x, 0)
+            centre = face - normal * (depth / 2 + WALL_INSET)
+            self.box(centre, along, width, depth, height, BOX_COLOR)
+            if p.Symbol != "caixa_passagem":
+                plate = face + normal * (PLATE[2] / 2)
+                self.box(plate, along, PLATE[0], PLATE[2], PLATE[1], PLATE_COLOR)
         else:
             centre = App.Vector(base.x, base.y, z)
             self.box(centre, d, width, depth, height, BOX_COLOR)

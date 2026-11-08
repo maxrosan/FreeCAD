@@ -196,7 +196,8 @@ def _riser(up):
 class Symbol:
     """A symbol and what an item of that type carries by default."""
 
-    def __init__(self, label, build, category, wall=False, power=0.0, unit="VA", kind=None, height=0.0):
+    def __init__(self, label, build, category, wall=False, power=0.0, unit="VA", kind=None, height=0.0,
+                 beside=0.0):
         self.label = label
         self.build = build
         self.category = category  # toolbar / menu group
@@ -205,6 +206,9 @@ class Symbol:
         self.unit = unit          # VA, W or CV
         self.kind = kind          # circuit kind it normally belongs to (None: carries no load)
         self.height = height      # mounting height above the floor (mm)
+        # mounted on a wall but drawn beside it: paper mm from the wall face to the symbol centre
+        # (switches, bell button, junction box); placing one snaps it there
+        self.beside = beside
 
 
 TOMADAS, INTERRUPTORES, ILUMINACAO, QUADROS = "Tomadas", "Interruptores", "Iluminação", "Quadros e outros"
@@ -218,15 +222,15 @@ SYMBOLS = {
                           wall=True, power=100, kind="TUG", height=2000),
     "tomada_piso": Symbol("Tomada no piso", _floor_socket, TOMADAS, power=100, kind="TUG"),
     "interruptor_simples": Symbol("Interruptor simples de uma seção (uma tecla)", _switch("simples", 1),
-                                  INTERRUPTORES, height=1300),
+                                  INTERRUPTORES, height=1300, beside=R_SW + 0.4),
     "interruptor_simples_2": Symbol("Interruptor simples de duas seções", _switch("simples", 2),
-                                    INTERRUPTORES, height=1300),
+                                    INTERRUPTORES, height=1300, beside=R_SW + 0.4),
     "interruptor_simples_3": Symbol("Interruptor simples de três seções", _switch("simples", 3),
-                                    INTERRUPTORES, height=1300),
+                                    INTERRUPTORES, height=1300, beside=R_SW + 0.4),
     "interruptor_paralelo": Symbol("Interruptor paralelo (three-way)", _switch("paralelo", 1),
-                                   INTERRUPTORES, height=1300),
+                                   INTERRUPTORES, height=1300, beside=R_SW + 0.4),
     "interruptor_intermediario": Symbol("Interruptor intermediário (four-way)", _switch("intermediario", 1),
-                                        INTERRUPTORES, height=1300),
+                                        INTERRUPTORES, height=1300, beside=R_SW + 0.4),
     "ponto_luz_teto": Symbol("Ponto de luz no teto", _ceiling_light(False), ILUMINACAO,
                              power=100, unit="W", kind="Iluminação"),
     "ponto_luz_teto_embutido": Symbol("Ponto de luz no teto, embutido", _ceiling_light(True), ILUMINACAO,
@@ -238,8 +242,9 @@ SYMBOLS = {
     "quadro_terminal": Symbol("Quadro terminal de luz e força (QD)", _panel("terminal"), QUADROS, height=1500),
     "quadro_geral": Symbol("Quadro geral de luz e força (QG)", _panel("geral"), QUADROS, height=1500),
     "motor": Symbol("Motor (ponto de força)", _motor, QUADROS, power=1, unit="CV", kind="Motor"),
-    "caixa_passagem": Symbol("Caixa de passagem na parede", _junction_box, QUADROS),
-    "botao_campainha": Symbol("Botão de campainha na parede", _bell_button, QUADROS, height=1300),
+    "caixa_passagem": Symbol("Caixa de passagem na parede", _junction_box, QUADROS, beside=2.0),
+    "botao_campainha": Symbol("Botão de campainha na parede", _bell_button, QUADROS, height=1300,
+                               beside=1.6),
     "padrao_entrada": Symbol("Padrão de entrada (caixa de medição)", _meter, QUADROS, height=1500),
     "circuito_sobe": Symbol("Circuito que sobe", _riser(True), QUADROS),
     "circuito_desce": Symbol("Circuito que desce", _riser(False), QUADROS),

@@ -652,3 +652,27 @@ class Test3D(unittest.TestCase):
         self.assertEqual(len(obj.Shape.Solids), everything)
         with self.assertRaises(ValueError):
             model3d.show_circuits(self.doc, [99])
+
+    def test_boxes_go_into_the_nearest_wall(self):
+        import Arch
+        import Draft
+        from freecad_electrical import model3d
+
+        V = App.Vector
+        base = Draft.make_wire([V(0, 0, 0), V(4000, 0, 0)])
+        Arch.makeWall(base, width=150, height=2800, align="Center")  # faces at y = -75 and 75
+        model.make_circuit(self.doc, 1, "Iluminação", "Iluminação", panel="QD1")
+        # a switch clicked 300 mm off the wall, a panel drawn across it
+        switch = model.make_point(self.doc, "interruptor_simples", V(1000, 300, 0), 0, circuit=1, letter="a")
+        model.make_point(self.doc, "quadro_terminal", V(2500, 250, 0), 90, label="QD1")
+        obj = model3d.model3d(self.doc)
+        self.doc.recompute()
+        boxes = [s for s in obj.Shape.Solids if abs(s.BoundBox.ZLength - 101.6) < 1 and abs(s.BoundBox.Center.x - 1000) < 1]
+        self.assertTrue(boxes)
+        self.assertTrue(all(-75 <= s.BoundBox.YMin and s.BoundBox.YMax <= 75 + 1e-6 for s in boxes))  # in the wall
+        panel = [s for s in obj.Shape.Solids if abs(s.BoundBox.Center.x - 2500) < 1 and s.BoundBox.ZLength > 300]
+        self.assertTrue(panel)
+        box = panel[0].BoundBox
+        self.assertAlmostEqual(box.YMax, 75, places=3)  # flush with the wall face
+        self.assertGreater(box.XLength, box.YLength)  # along the wall
+        self.assertEqual(model.SYMBOLS[switch.Symbol].beside > 0, True)
