@@ -357,6 +357,9 @@ class _Observer:
         doc = App.listDocuments().get(name)
         if doc is None:
             return
+        if getattr(doc, "Restoring", False):
+            self._schedule(doc)  # still loading: try again once it is open
+            return
         try:
             if sync(doc):
                 doc.recompute()
@@ -371,12 +374,19 @@ class _Observer:
         if not obj.TypeId.startswith("TechDraw::") and obj.TypeId != "App::LinkGroup":
             self._schedule(obj.Document)
 
+    def slotActivateDocument(self, doc):
+        # Opening a file creates no objects as far as observers go: the sheets saved with it may
+        # be out of date (an object moved to another floor, a file from an older version).
+        self._schedule(doc)
+
     def slotRecomputedDocument(self, doc):
         if App.GuiUp:
             try:
                 follow_schedule(doc)
             except Exception:
                 pass
+            # An object moved, raised to another floor or hidden changes what each sheet draws.
+            self._schedule(doc)
 
 
 _observer = None
