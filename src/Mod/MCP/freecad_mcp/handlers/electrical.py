@@ -277,7 +277,7 @@ def create_electrical_sheets(sheet="auto", title=None, schedule=True, diagram=Tr
 
 
 @command("draw_conduit", transaction=True)
-def draw_conduit(points=None, installation="teto", circuits=None, extra=None, diameter=None, marks_at=0.5,
+def draw_conduit(points=None, installation="teto", circuits=None, extra=None, diameter=None, marks_at=None,
                  conductors=None, circuit=None, gauge=None, scale=None, layer=None, label=None, automatic=None,
                  nivel=None):
     """Conduit along `points`. Automatic (the default without circuits or extra conductors): its

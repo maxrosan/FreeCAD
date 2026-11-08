@@ -113,7 +113,58 @@ def _black(vobj):
         vobj.PointSize = 1
 
 
-class ViewProviderPoint(_ViewProvider):
+class _LabelsView(_ViewProvider):
+    """Draws the object's texts (its Labels shape) as filled glyphs without an outline: with
+    the outline of the lines around each glyph, small text looks bold."""
+
+    def attach(self, vobj):
+        super().attach(vobj)
+        from pivy import coin
+
+        self._switch = coin.SoSwitch()
+        sep = coin.SoSeparator()
+        pick = coin.SoPickStyle()
+        pick.style = coin.SoPickStyle.UNPICKABLE
+        light = coin.SoLightModel()
+        light.model = coin.SoLightModel.BASE_COLOR
+        color = coin.SoBaseColor()
+        color.rgb = (0.0, 0.0, 0.0)
+        self._coords = coin.SoCoordinate3()
+        self._faces = coin.SoIndexedFaceSet()
+        for node in (pick, light, color, self._coords, self._faces):
+            sep.addChild(node)
+        self._switch.addChild(sep)
+        self._switch.whichChild = 0 if vobj.Visibility else -1
+        vobj.RootNode.addChild(self._switch)
+        self._draw_labels(vobj.Object)
+
+    def _draw_labels(self, obj):
+        if getattr(self, "_coords", None) is None:
+            return
+        shape = getattr(obj, "Labels", None)
+        pts, index = [], []
+        if shape is not None and not shape.isNull() and shape.Faces:
+            vertices, triangles = shape.tessellate(0.05)
+            pts = [(v.x, v.y, v.z) for v in vertices]
+            for a, b, c in triangles:
+                index += [a, b, c, -1]
+        self._coords.point.setNum(len(pts))
+        if pts:
+            self._coords.point.setValues(0, len(pts), pts)
+        self._faces.coordIndex.setNum(len(index))
+        if index:
+            self._faces.coordIndex.setValues(0, len(index), index)
+
+    def updateData(self, obj, prop):
+        if prop == "Labels":
+            self._draw_labels(obj)
+
+    def onChanged(self, vobj, prop):
+        if prop == "Visibility" and getattr(self, "_switch", None) is not None:
+            self._switch.whichChild = 0 if vobj.Visibility else -1
+
+
+class ViewProviderPoint(_LabelsView):
     def __init__(self, vobj):
         super().__init__(vobj)
         _black(vobj)
@@ -135,7 +186,7 @@ class ViewProviderCircuit(_ViewProvider):
         return True
 
 
-class ViewProviderConduit(_ViewProvider):
+class ViewProviderConduit(_LabelsView):
     icon_name = "eletroduto"
 
     def __init__(self, vobj):

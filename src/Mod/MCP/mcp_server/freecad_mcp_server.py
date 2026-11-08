@@ -644,14 +644,16 @@ def create_electrical_sheets(sheet: Literal["auto", "A4", "A3", "A2", "A1", "A0"
 @tool()
 def draw_conduit(points: list[Point], installation: Literal["teto", "parede", "piso"] = "teto",
                  circuits: list[int] | None = None, extra: list[Literal["retorno", "fase", "neutro", "terra"]] | None = None,
-                 diameter: str | int | None = None, marks_at: float = 0.5, label: str | None = None,
+                 diameter: str | int | None = None, marks_at: float | None = None, label: str | None = None,
                  automatic: bool | None = None, nivel: str | Length | None = None) -> dict:
     """Conduit (eletroduto) along points in mm: solid in ceiling/wall, dashed in the floor. Draw it from the
     panel to the items (ends on the items, or passing by them). Automatic (default when no circuits/extra
     are given): the circuits and conductors in it come from the items it reaches - phase, neutral and
     earth to loads, phase to switches, one return per switch letter between switch and lights - and the
     diameter is suggested. Manual: marks from `circuits` plus `extra` (e.g. ["retorno"]). Each group shows
-    the circuit number above and the section below; marks sit at `marks_at` (0..1 of the length).
+    the circuit number above and its section below when it is not 2,5 mm²; the diameter is written when
+    it is not 20 mm (the plan sheet carries a note). The marks go where they overlap no other text, or at
+    `marks_at` (0..1 of the length) when given.
     nivel: floor (BIM level name or elevation)."""
     return fc("draw_conduit", points=points, installation=installation, circuits=circuits, extra=extra,
               diameter=diameter, marks_at=marks_at, label=label, automatic=automatic, nivel=nivel)

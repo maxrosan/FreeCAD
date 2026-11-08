@@ -29,6 +29,7 @@ STANDARD_SCALES = [1, 2, 5, 10, 20, 25, 50, 75, 100, 125, 200, 250, 500, 1000, 2
 # Margins (mm) of the area the drawing may use: left, right, bottom (title block strip), top.
 MARGINS = (25, 15, 70, 15)
 SKIP_NAMES = ("MCP_Settings", "Revisao")
+LINE_SPACING = 1.5  # line pitch of the texts on plan sheets, in text heights
 
 
 def drawing_area(size):
@@ -141,13 +142,13 @@ def extent(objs):
         nonlocal box
         for member in getattr(o, "Group", None) or []:
             add(member)
-        shape = getattr(o, "Shape", None)
-        if shape is None or shape.isNull():
-            return
-        if box is None:
-            box = App.BoundBox(shape.BoundBox)
-        else:
-            box.add(shape.BoundBox)
+        for shape in (getattr(o, "Shape", None), getattr(o, "Labels", None)):
+            if shape is None or shape.isNull():
+                continue
+            if box is None:
+                box = App.BoundBox(shape.BoundBox)
+            else:
+                box.add(shape.BoundBox)
 
     for obj in objs:
         add(obj)
@@ -254,6 +255,7 @@ def make_sheet(doc, sheet="auto", scale=None, objs=None, title=None, line_width=
     view.Scale = 1 / scale
     view.LineWidth = float(line_width)
     view.FontSize = 2.0 * float(text_height)  # Draft's get_svg draws texts at half of FontSize
+    view.LineSpacing = LINE_SPACING * float(text_height)  # room name and area apart (paper mm)
     page.addView(view)
     # X, Y is the centre of the view: the middle of the free area (after addView, which centres it).
     x0, y0, x1, y1 = drawing_area(size)
@@ -328,6 +330,13 @@ def follow_schedule(doc):
 def sync(doc):
     """Rebuild the element list of every AutoSources sheet content; True if something changed."""
     changed = False
+    for view in doc.findObjects("TechDraw::DrawViewDraft"):
+        # Sheets made before the line spacing was set draw the room name over its area.
+        source = view.Source
+        spacing = LINE_SPACING * view.FontSize / 2
+        if source is not None and getattr(source, AUTO, None) is not None and view.LineSpacing < spacing - 1e-6:
+            view.LineSpacing = spacing
+            changed = True
     for obj in doc.Objects:
         if obj.TypeId == "App::LinkGroup" and getattr(obj, AUTO, False):
             current = _content_sources(doc, obj)
@@ -361,7 +370,13 @@ class _Observer:
             self._schedule(doc)  # still loading: try again once it is open
             return
         try:
-            if sync(doc):
+            changed = sync(doc)
+            from . import layout
+
+            old = layout.stale(doc)
+            for obj in old:
+                obj.touch()
+            if changed or old:
                 doc.recompute()
         except Exception as e:
             App.Console.PrintWarning(f"Elétrica: folhas não atualizadas: {e}\n")
@@ -399,6 +414,25 @@ def install_observer():
         App.addDocumentObserver(_observer)
 
 
+def plan_notes():
+    """What the plan leaves unwritten, to go on its sheet."""
+    section = f"{model.DEFAULT_SECTION:g}".replace(".", ",")
+    return ["NOTAS:",
+            f"Condutores sem indicação de seção: {section} mm².",
+            f"Eletrodutos sem indicação de diâmetro: ø{model.DEFAULT_CONDUIT} mm."]
+
+
+def add_notes(doc, page, lines, text_mm=2.5):
+    """Notes in the free strip left of the title block."""
+    note = doc.addObject("TechDraw::DrawViewAnnotation", "Notas")
+    note.Text = lines
+    note.TextSize = text_mm
+    page.addView(note)
+    width = max(len(t) for t in lines) * text_mm * 0.55
+    note.X, note.Y = MARGINS[0] + 2 + width / 2, MARGINS[2] - 15 - len(lines) * text_mm * 0.8
+    return note
+
+
 def make_electrical_sheets(doc, title=None, sheet="auto", scale=None, schedule=True, diagram=True, materials=True):
     """Every page of the electrical design, all kept up to date: the plan (one page per floor
     when items are on several floors), the load schedule, the single-line diagram and the bill of
@@ -414,6 +448,8 @@ def make_electrical_sheets(doc, title=None, sheet="auto", scale=None, schedule=T
             pages.append(("planta", page))
     else:
         pages.append(("planta", make_sheet(doc, sheet, scale, title=f"{title} - planta elétrica")[0]))
+    for kind, page in pages:
+        add_notes(doc, page, plan_notes())
     if schedule:
         pages.append(("quadro_de_cargas", make_schedule_page(doc)[0]))
     if diagram:

@@ -24,7 +24,7 @@ This module works without the GUI (FreeCADCmd); view providers are attached when
 import FreeCAD as App
 
 from . import calc, geometry
-from .symbols import CONDUCTORS, SYMBOLS
+from .symbols import CONDUCTORS, SYMBOLS, TEXT_HEIGHT
 
 CONTAINER = "InstalacaoEletrica"
 T_INSTALLATION, T_POINT, T_CIRCUIT, T_CONDUIT, T_SCHEDULE = (
@@ -53,6 +53,11 @@ def _vp(obj, name):
 
 class _Proxy:
     Type = None
+
+    def svg_filled_shapes(self, obj):
+        """Texts of the object, filled without an outline on sheets (Draft get_svg asks)."""
+        labels = getattr(obj, "Labels", None)
+        return [labels] if labels is not None and not labels.isNull() else []
 
     def dumps(self):
         return None
@@ -106,7 +111,8 @@ def network_changed(doc):
         return
     for obj in doc.Objects:
         kind = type_of(obj)
-        if kind == T_CIRCUIT or kind in OUTPUT_TYPES or (kind == T_CONDUIT and getattr(obj, "Automatic", False)):
+        # items and conduits too: their texts move to stay clear of each other (layout)
+        if kind in (T_CIRCUIT, T_POINT, T_CONDUIT) or kind in OUTPUT_TYPES:
             obj.touch()
 
 
@@ -223,7 +229,8 @@ class ElectricalPoint(_Proxy):
 
     SPECS = [("App::PropertyEnumeration", "DemandGroup", "Ponto elétrico",
               "Grupo para o cálculo da demanda (Automático: pelo tipo e pelo nome)",
-              [calc.AUTO_GROUP] + calc.DEMAND_GROUPS, 0)]
+              [calc.AUTO_GROUP] + calc.DEMAND_GROUPS, 0),
+             ("Part::PropertyPartShape", "Labels", "Ponto elétrico", "Textos do símbolo", None, 2)]
 
     def onDocumentRestored(self, obj):
         _ensure(obj, self.SPECS)
@@ -244,19 +251,36 @@ class ElectricalPoint(_Proxy):
         sym = SYMBOLS[obj.Symbol]
         va, w = calc.item_power(obj.Power, obj.PowerUnit, obj.Quantity, obj.PowerFactor)
         obj.PowerVA, obj.PowerW = round(va, 1), round(w, 1)
-        number = obj.Circuit.Number if obj.Circuit is not None and type_of(obj.Circuit) == T_CIRCUIT else None
         obj.CircuitName = obj.Circuit.Name if obj.Circuit is not None else ""
-        params = {"potencia": calc.power_text(obj.Power, obj.PowerUnit, obj.Quantity) if sym.kind else "",
-                  "circuito": str(number) if number is not None else "",
-                  "letra": obj.Letter}
-        scale = obj.Scale if obj.Scale > 0 else scale_of(obj.Document)
-        frame = geometry.Frame(obj.Position, obj.Rotation.Value, scale)
+        prims, frame = point_parts(obj)
+        from . import layout
+
+        shape, labels = geometry.build_shape(prims, frame, layout.slot_of(obj))
         self._building = True
         try:
-            obj.Shape = geometry.build_shape(sym.build(params), frame)
+            obj.Shape = shape
+            if "Labels" in obj.PropertiesList:
+                obj.Labels = labels if labels is not None else _empty_shape()
             obj.Placement = App.Placement()
         finally:
             self._building = False
+
+
+def _empty_shape():
+    import Part
+
+    return Part.Shape()
+
+
+def point_parts(obj):
+    """(primitives, frame) of an item's symbol, from its data."""
+    sym = SYMBOLS[obj.Symbol]
+    number = obj.Circuit.Number if obj.Circuit is not None and type_of(obj.Circuit) == T_CIRCUIT else None
+    params = {"potencia": calc.power_text(obj.Power, obj.PowerUnit, obj.Quantity) if sym.kind else "",
+              "circuito": str(number) if number is not None else "",
+              "letra": obj.Letter}
+    scale = obj.Scale if obj.Scale > 0 else scale_of(obj.Document)
+    return sym.build(params), geometry.Frame(obj.Position, obj.Rotation.Value, scale)
 
 
 def _absorb_placement(obj):
@@ -752,7 +776,10 @@ class Conduit(_Proxy):
              ("App::PropertyLink", "Network", "Eletroduto",
               "Quadro de cargas (para calcular depois dos circuitos)", None, 2),
              ("App::PropertyString", "DiameterSuggested", "Cálculo",
-              "Diâmetro sugerido (ocupação de até 40 %)", "", 1)]
+              "Diâmetro sugerido (ocupação de até 40 %)", "", 1),
+             ("App::PropertyBool", "AutoMarks", "Eletroduto",
+              "Marcas onde não sobrepõem outros textos (desligado: em MarksAt)", True, 0),
+             ("Part::PropertyPartShape", "Labels", "Eletroduto", "Textos das marcas", None, 2)]
 
     def onDocumentRestored(self, obj):
         _ensure(obj, self.SPECS)
@@ -763,15 +790,16 @@ class Conduit(_Proxy):
         elif prop in ("Points", "Installation", "Automatic") and not _restoring(obj):
             network_changed(obj.Document)
 
-    def groups(self, obj):
-        """[(circuit, marks)] in the conduit: from the routing when automatic (at the marks
-        position), else from its Circuits list. Plus the extra conductors (circuit None)."""
+    def groups(self, obj, fraction=None):
+        """[(circuit, marks)] in the conduit: from the routing when automatic (at `fraction` of
+        its length, the marks position by default), else from its Circuits list. Plus the extra
+        conductors (circuit None)."""
         out = []
         if obj.Automatic:
             from . import network
 
             net = network.network(obj.Document)
-            edge = net.edge_at(obj, obj.MarksAt)
+            edge = net.edge_at(obj, obj.MarksAt if fraction is None else fraction)
             if edge is not None:
                 out = net.conductors(edge)
         if not out:
@@ -793,44 +821,80 @@ class Conduit(_Proxy):
                 shapes += _dashes(a, b, 2.0 * scale, 1.0 * scale)
             elif (b - a).Length > 1e-9:
                 shapes.append(Part.LineSegment(a, b).toShape())
-        at, direction = _point_along(pts, obj.MarksAt)
-        frame = geometry.Frame(at, geometry.angle_of(direction), scale)
-        content = self.groups(obj)
-        sections = []
-        for c, marks in content:
-            section = (c.Section or c.SectionSuggested) if c is not None else 1.5
-            sections += [section] * len(marks)
+        from . import layout
+
+        prims, frame, sections, _ = conduit_marks(obj, *layout.marks_of(obj))
         obj.DiameterSuggested = str(calc.suggest_conduit(sections)) if sections else ""
-        groups = [(str(c.Number) if c is not None else "", marks,
-                   (c.Section or c.SectionSuggested) if c is not None else None) for c, marks in content]
-        prims = []
-        pitch, gap = 1.3, 2.2
-        widths = [len(marks) * pitch for _, marks, _ in groups]
-        x = -(sum(widths) + gap * (len(groups) - 1)) / 2 + pitch / 2
-        for (label, marks, section), width in zip(groups, widths):
-            start = x
-            for mark in marks:
-                for prim in CONDUCTORS[mark]:
-                    prims.append((prim[0], (prim[1][0] + x, prim[1][1]), (prim[2][0] + x, prim[2][1])))
-                x += pitch
-            middle = (start + x - pitch) / 2
-            if label:
-                prims.append(("text", (middle, 1.9), label, "center"))
-            if section:
-                prims.append(("text", (middle, -3.4), f"{section:g}".replace(".", ","), "center"))
-            x += gap
-        diameter = obj.Diameter or (obj.DiameterSuggested if obj.Automatic else "")
-        if diameter:
-            prims.append(("text", (-(sum(widths) + gap * len(groups)) / 2 - 0.5, -3.4), f"ø{diameter}",
-                          "right"))
+        labels = None
         if prims:
-            shapes.append(geometry.build_shape(prims, frame))
+            marks, labels = geometry.build_shape(prims, frame)
+            shapes.append(marks)
         self._building = True
         try:
             obj.Shape = Part.makeCompound(shapes)
+            if "Labels" in obj.PropertiesList:
+                obj.Labels = labels if labels is not None else _empty_shape()
             obj.Placement = App.Placement()
         finally:
             self._building = False
+
+
+DEFAULT_SECTION = 2.5   # mm²: sections not written on the plan (see the note on the sheet)
+DEFAULT_CONDUIT = "20"  # mm: conduit diameter not written on the plan
+MARK_PITCH, GROUP_GAP = 1.3, 1.2  # paper mm between conductor marks, and between circuits
+
+
+def conduit_marks(obj, fraction, flip=False):
+    """(primitives, frame, sections, half length in mm) of the conductor marks of a conduit,
+    placed at `fraction` of its length: one tick per conductor, the circuit number on one side of
+    each group (the other side when `flip`), its section on the other side when not 2,5 mm² and
+    the diameter when not 20 mm."""
+    up = -1 if flip else 1
+    pts = list(obj.Points)
+    scale = obj.Scale if obj.Scale > 0 else scale_of(obj.Document)
+    at, direction = _point_along(pts, fraction)
+    frame = geometry.Frame(at, geometry.angle_of(direction), scale)
+    content = obj.Proxy.groups(obj, fraction)
+    sections = []
+    for c, marks in content:
+        section = (c.Section or c.SectionSuggested) if c is not None else 1.5
+        sections += [section] * len(marks)
+    th = TEXT_HEIGHT
+    d = frame.direction
+
+    def along(text):  # paper mm an upright text takes along the conduit
+        return (abs(d.x) * geometry.text_width(text, th) + abs(d.y) * th * 1.2) if text else 0.0
+
+    groups = []
+    for c, marks in content:
+        label = str(c.Number) if c is not None else ""
+        section = (c.Section or c.SectionSuggested) if c is not None else None
+        text = f"{section:g}".replace(".", ",") if section and abs(section - DEFAULT_SECTION) > 1e-9 else ""
+        width = max(len(marks) * MARK_PITCH, along(label) + 0.4, along(text) + 0.4)
+        groups.append((label, marks, text, width))
+    prims = []
+    total = sum(g[3] for g in groups) + GROUP_GAP * max(len(groups) - 1, 0)
+    x = -total / 2
+    for label, marks, text, width in groups:
+        middle = x + width / 2
+        mx = middle - (len(marks) - 1) * MARK_PITCH / 2
+        for mark in marks:
+            for prim in CONDUCTORS[mark]:
+                prims.append((prim[0], (prim[1][0] + mx, prim[1][1]), (prim[2][0] + mx, prim[2][1])))
+            mx += MARK_PITCH
+        if label:
+            prims.append(("side", (middle, 0), label, 2.0, up))
+        if text:
+            prims.append(("side", (middle, 0), text, 2.0, -up))
+        x += width + GROUP_GAP
+    suggested = str(calc.suggest_conduit(sections)) if sections else ""
+    diameter = obj.Diameter or (suggested if obj.Automatic else "")
+    half = total / 2
+    if diameter and diameter != DEFAULT_CONDUIT and prims:
+        text = f"ø{diameter}"
+        prims.append(("side", (-total / 2 - 0.6 - along(text) / 2, 0), text, 0.6, -up))
+        half += 0.6 + along(text)
+    return prims, frame, sections, half * scale
 
 
 def _dashes(a, b, dash, gap):
@@ -862,10 +926,11 @@ def _point_along(pts, fraction):
     return a + direction * target, direction
 
 
-def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diameter="", marks_at=0.5, label=None,
+def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diameter="", marks_at=None, label=None,
                  automatic=None):
     """A conduit. Automatic (the default when no circuits or extra conductors are given): its
-    circuits and conductors come from the items it connects."""
+    circuits and conductors come from the items it connects. Its conductor marks go where they
+    overlap the least, or at `marks_at` (0..1 of the length) when given."""
     if automatic is None:
         automatic = not circuits and not extra
     if installation not in INSTALLATIONS:
@@ -882,7 +947,8 @@ def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diamet
     obj.Circuits = [_resolve_circuit(doc, c, "tomada_baixa") for c in circuits or ()]
     obj.ExtraConductors = list(extra or ())
     obj.Diameter = str(diameter or "")
-    obj.MarksAt = float(marks_at)
+    obj.MarksAt = 0.5 if marks_at is None else float(marks_at)
+    obj.AutoMarks = marks_at is None
     obj.Automatic = bool(automatic)
     obj.Network = schedule(doc)
     numbers = ",".join(str(c.Number) for c in obj.Circuits)

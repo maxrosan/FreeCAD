@@ -19,6 +19,9 @@ Primitives:
       lands on the wall: mode "tip" puts it past the tip of a wall symbol, on the room side;
       "side" beside a box (above/below when horizontal, to the right when vertical);
       line 0 is the first line of text, 1 the second.
+  ("block", (x, y), [lines], mode[, r])  texts that may move to avoid overlaps (see
+      geometry.block_candidates): mode "tip" for a wall symbol whose tip is at (x, y), "round" for
+      a symbol of radius r centred at (x, y).
 """
 
 import math
@@ -41,14 +44,20 @@ def _triangle(x0, filled):
     return prims
 
 
-def _tip_labels(p, tip):
-    """Power and circuit of a wall symbol, past its tip."""
+def _lines(p, letter=False):
+    """Power, circuit (and letter) of an item, one per line."""
     lines = [str(p["potencia"])] if p.get("potencia") else []
     if p.get("circuito"):
         lines.append(f"-{p['circuito']}-")
-    if p.get("letra"):
+    if letter and p.get("letra"):
         lines.append(str(p["letra"]))
-    return [("label", tip, text, i, "tip") for i, text in enumerate(lines)]
+    return lines
+
+
+def _tip_labels(p, tip):
+    """Power and circuit of a wall symbol: a block of texts, past its tip unless that overlaps."""
+    lines = _lines(p, letter=True)
+    return [("block", tip, lines, "tip")] if lines else []
 
 
 def _socket(filled):
@@ -61,11 +70,8 @@ def _socket(filled):
 def _floor_socket(p):
     prims = [("poly", [(-1.8, -1.8), (1.8, -1.8), (1.8, 1.8), (-1.8, 1.8)], True, False)]
     prims += [("poly", [(-1.0, -1.1), (1.2, 0), (-1.0, 1.1)], True, False)]
-    if p.get("potencia"):
-        prims.append(("text", (2.2, 1.2), str(p["potencia"]), "left"))
-    if p.get("circuito"):
-        prims.append(("text", (2.2, -2.0), f"-{p['circuito']}-", "left"))
-    return prims
+    lines = _lines(p)
+    return prims + ([("block", (0, 0), lines, "round", 1.8)] if lines else [])
 
 
 R_SW = 1.2  # switch circle radius
@@ -98,14 +104,13 @@ def _switch(kind, sections):
     return build
 
 
-def _light_labels(p, r):
+def _light_labels(p, r, half_width=None):
     prims = []
     if p.get("letra"):
         prims.append(("text", (r * 0.75, r + 0.4), str(p["letra"]), "left"))
-    if p.get("circuito"):
-        prims.append(("text", (-r - 0.6, -r - 2.4), f"-{p['circuito']}-", "right"))
-    if p.get("potencia"):
-        prims.append(("text", (r * 0.4, -r - 2.4), str(p["potencia"]), "left"))
+    lines = _lines(p)
+    if lines:
+        prims.append(("block", (0, 0), lines, "round", half_width or r))
     return prims
 
 
@@ -126,7 +131,7 @@ def _wall_light(p):
 def _fluorescent(p):
     prims = [("poly", [(-3.5, -0.9), (3.5, -0.9), (3.5, 0.9), (-3.5, 0.9)], True, False),
              ("circle", (0, 0), 0.6, False)]
-    return prims + _light_labels(p, 0.9)
+    return prims + _light_labels(p, 0.9, 3.5)
 
 
 def _panel(kind):
@@ -154,11 +159,8 @@ def _bell_button(p):
 
 def _motor(p):
     prims = [("circle", (0, 0), 2.2, False), ("text", (0, -1.0), "M", "center")]
-    if p.get("potencia"):
-        prims.append(("text", (2.8, 0.4), str(p["potencia"]), "left"))
-    if p.get("circuito"):
-        prims.append(("text", (2.8, -2.4), f"-{p['circuito']}-", "left"))
-    return prims
+    lines = _lines(p)
+    return prims + ([("block", (0, 0), lines, "round", 2.2)] if lines else [])
 
 
 def _arrow(tip, tail):

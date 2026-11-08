@@ -37,6 +37,12 @@ Building electrical plans in FreeCAD, Brazilian conventions:
   Estimates for review, not a design approval.
 * **Sheets that stay up to date**: one plan page per floor (or one for the whole document), and
   pages for the schedule, the single-line diagram and the materials.
+* **Legible plans.** Texts are filled glyphs without an outline (an outline makes small text look
+  bold), in the 3D view and on sheets. The power and circuit of each item, and the conductor
+  marks of each conduit, go where they overlap the least: around the symbol, along the conduit or
+  on its other side, clear of symbols, conduits, walls and other texts. A room name that falls on
+  an item moves aside (unless it was moved by hand). Sections of 2,5 mm² and ø20 conduits are not
+  written; a note on the plan sheet says so.
 
 ## Using it
 
@@ -59,6 +65,7 @@ Deleting an item updates its circuit, the routes, the schedule and the sheets.
 * `freecad_electrical/calc.py`: currents, breakers, sections with corrections, voltage drop, RCDs,
   phases, NBR 5410 minimums, demand and entrance categories, conduit sizes.
 * `freecad_electrical/outputs.py`: bill of materials and single-line diagram.
+* `freecad_electrical/layout.py`: where the movable texts go, floor by floor.
 * `freecad_electrical/checks.py`, `sheets.py`, `gui.py`, `geometry.py`.
 
 The MCP module (`src/Mod/MCP`) uses this module for its electrical tools.

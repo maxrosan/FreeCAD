@@ -1209,6 +1209,25 @@ def get_svg(
                 -DraftVecUtils.angle(p2 - p1),
             )
 
+    # Areas an object wants filled without an outline, such as texts drawn as glyph faces:
+    # an outline around each glyph makes small text look bold.
+    filled = getattr(getattr(obj, "Proxy", None), "svg_filled_shapes", None)
+    if callable(filled):
+        faces = [face for shape in filled(obj) if shape is not None for face in shape.Faces]
+        for i, face in enumerate(faces):
+            svg += get_path(
+                obj,
+                plane,
+                stroke,
+                pathdata,
+                "none",
+                0,
+                "none",
+                fill_opacity=1,
+                wires=face.Wires,
+                pathname="%s_fill%04d" % (obj.Name, i),
+            )
+
     # techdraw expects bottom-to-top coordinates
     if techdraw:
         svg = '<g transform ="scale(1,-1)">\n    ' + svg + "</g>\n"

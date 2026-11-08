@@ -93,11 +93,16 @@ class TestModel(unittest.TestCase):
         self.assertFalse(p.Shape.isNull())
         circle = [e for e in p.Shape.Edges if hasattr(e.Curve, "Radius") and abs(e.Curve.Radius - 125) < 1e-6]
         self.assertTrue(circle)  # Ø 5 mm on paper at 1:50
-        self.assertTrue(p.Shape.Faces)  # the texts are faces
-        before = len(p.Shape.Faces)
+        self.assertFalse(p.Shape.Faces)  # the texts are kept apart, as faces
+        before = len(p.Labels.Faces)
+        self.assertTrue(before)
         p.Quantity = 2  # "2x100W" has more characters than "100W"
         self.doc.recompute()
-        self.assertGreater(len(p.Shape.Faces), before)
+        self.assertGreater(len(p.Labels.Faces), before)
+        import Draft
+
+        svg = Draft.get_svg(p, techdraw=True)
+        self.assertIn('stroke="none"', svg)  # texts filled without an outline on sheets
 
     def test_editing_and_deleting_update_the_circuit(self):
         a = model.make_point(self.doc, "tomada_baixa", App.Vector(0, 0, 0), circuit=1)
@@ -462,3 +467,57 @@ class TestOutputs(unittest.TestCase):
         model.make_point(self.doc, "tomada_baixa", App.Vector(0, 2000, 0), 0, circuit=7, label="Tomada nova")
         self.doc.recompute()
         self.assertIn(">7<", view.Symbol)  # the new circuit is on the diagram
+
+
+def _boxes_overlap(a, b):
+    return min(a.XMax, b.XMax) - max(a.XMin, b.XMin) > 1e-6 and min(a.YMax, b.YMax) - max(a.YMin, b.YMin) > 1e-6
+
+
+class TestLayout(unittest.TestCase):
+    def setUp(self):
+        self.doc = App.newDocument("TestArranjo")
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def test_texts_of_crowded_items_do_not_overlap(self):
+        V = App.Vector
+        _house(self.doc)
+        # three sockets side by side on the same wall, and a light right next to the conduit
+        for x in (600, 900, 1200):
+            model.make_point(self.doc, "tomada_media", V(x, 3000, 0), -90, circuit=2)
+        model.make_point(self.doc, "ponto_luz_teto", V(1500, 150, 0), circuit=1, letter="a")
+        self.doc.recompute()
+        labelled = [o for o in model.points(self.doc) + model.conduits(self.doc) if not o.Labels.isNull()]
+        self.assertGreater(len(labelled), 6)
+        for i, a in enumerate(labelled):
+            for b in labelled[i + 1:]:
+                for fa in a.Labels.Faces:
+                    for fb in b.Labels.Faces:
+                        self.assertFalse(_boxes_overlap(fa.BoundBox, fb.BoundBox), (a.Label, b.Label))
+
+    def test_marks_leave_the_usual_sizes_to_the_note(self):
+        from freecad_electrical import layout
+
+        qd, light, switch, socket, a, b, c = _house(self.doc)
+        self.doc.recompute()
+        prims, frame, sections, _ = model.conduit_marks(c, *layout.marks_of(c))
+        texts = [p[2] for p in prims if p[0] == "side"]
+        self.assertEqual(texts, ["2"])  # circuit 2 at 2,5 mm² in ø20: just its number
+        self.assertIn(2.5, sections)
+        prims, _, _, _ = model.conduit_marks(a, 0.5)
+        self.assertIn("1,5", [p[2] for p in prims if p[0] == "side"])  # lighting at 1,5 mm² is written
+        self.assertIn("2,5 mm²", " ".join(sheets.plan_notes()))
+
+    def test_marks_slide_off_an_item_text(self):
+        from freecad_electrical import layout
+
+        V = App.Vector
+        _house(self.doc)
+        # an item whose texts sit right on the middle of the conduit to the light
+        model.make_point(self.doc, "motor", V(1500, -250, 0), circuit=1)
+        self.doc.recompute()
+        conduit = [c for c in model.conduits(self.doc) if c.Points[-1] == V(3000, 0, 0)][0]
+        t, _ = layout.marks_of(conduit)
+        self.assertNotAlmostEqual(t, 0.5)
+
