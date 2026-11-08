@@ -499,7 +499,7 @@ ElectricalSymbol = Literal[
     "interruptor_paralelo", "interruptor_intermediario",
     "ponto_luz_teto", "ponto_luz_teto_embutido", "ponto_luz_parede", "luminaria_fluorescente",
     "quadro_terminal", "quadro_geral", "motor", "caixa_passagem", "botao_campainha",
-    "circuito_sobe", "circuito_desce",
+    "circuito_sobe", "circuito_desce", "padrao_entrada",
 ]
 CircuitKind = Literal["Iluminação", "TUG", "TUE", "Motor", "Alimentador"]
 Connection = Literal["Monofásico (F+N)", "Bifásico (F+F)", "Trifásico (3F)", "Trifásico (3F+N)"]
@@ -632,21 +632,34 @@ def check_installation() -> dict:
 
 
 @tool()
-def create_electrical_sheets(sheet: Literal["auto", "A4", "A3", "A2", "A1", "A0"] = "auto",
-                             title: str | None = None, schedule: bool = True, diagram: bool = True,
-                             materials: bool = True) -> dict:
-    """The plan pages (one per floor when items are on several floors), the load schedule, the
-    single-line diagram and the bill of materials; all update themselves when items change."""
-    return fc("create_electrical_sheets", sheet=sheet, title=title, schedule=schedule, diagram=diagram,
-              materials=materials)
+def electrical_3d(page: bool = True) -> dict:
+    """3D model of the electrical installation, built from the plan and kept up to date: conduits above the
+    ceiling (forro), in the floor or buried, drops down the walls to 4x2 boxes, octagonal boxes for the
+    lights, the panel box, risers between floors and the service entrance (pole and meter box, place a
+    "padrao_entrada" item and draw a conduit with installation "enterrado" to the panel). Coloured by
+    circuit, fixed-radius bends. `page`: also an isometric TechDraw page. See it with
+    get_screenshot(direction="iso")."""
+    return fc("electrical_3d", page=page)
 
 
 @tool()
-def draw_conduit(points: list[Point], installation: Literal["teto", "parede", "piso"] = "teto",
+def create_electrical_sheets(sheet: Literal["auto", "A4", "A3", "A2", "A1", "A0"] = "auto",
+                             title: str | None = None, schedule: bool = True, diagram: bool = True,
+                             materials: bool = True, model_3d: bool = True) -> dict:
+    """The plan pages (one per floor when items are on several floors), the load schedule, the
+    single-line diagram, the bill of materials and an isometric page of the 3D installation; all update
+    themselves when items change."""
+    return fc("create_electrical_sheets", sheet=sheet, title=title, schedule=schedule, diagram=diagram,
+              materials=materials, model_3d=model_3d)
+
+
+@tool()
+def draw_conduit(points: list[Point], installation: Literal["teto", "parede", "piso", "enterrado"] = "teto",
                  circuits: list[int] | None = None, extra: list[Literal["retorno", "fase", "neutro", "terra"]] | None = None,
                  diameter: str | int | None = None, marks_at: float | None = None, label: str | None = None,
                  automatic: bool | None = None, nivel: str | Length | None = None) -> dict:
-    """Conduit (eletroduto) along points in mm: solid in ceiling/wall, dashed in the floor. Draw it from the
+    """Conduit (eletroduto) along points in mm: solid in ceiling/wall, dashed in the floor, dash-dot when
+    buried ("enterrado": the service entrance run from a padrao_entrada item to the panel). Draw it from the
     panel to the items (ends on the items, or passing by them). Automatic (default when no circuits/extra
     are given): the circuits and conductors in it come from the items it reaches - phase, neutral and
     earth to loads, phase to switches, one return per switch letter between switch and lights - and the

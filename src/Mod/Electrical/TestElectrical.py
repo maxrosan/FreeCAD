@@ -465,7 +465,7 @@ class TestOutputs(unittest.TestCase):
         _house(self.doc)
         self.doc.recompute()
         pages = sheets.make_electrical_sheets(self.doc)
-        self.assertEqual([k for k, _ in pages], ["planta", "quadro_de_cargas", "unifilar", "materiais"])
+        self.assertEqual([k for k, _ in pages], ["planta", "quadro_de_cargas", "unifilar", "materiais", "3d"])
         view = [o for o in self.doc.Objects if o.TypeId == "TechDraw::DrawViewSymbol"][0]
         self.assertIn("QUADRO QD1", view.Symbol)
         model.make_point(self.doc, "tomada_baixa", App.Vector(0, 2000, 0), 0, circuit=7, label="Tomada nova")
@@ -533,3 +533,98 @@ class TestLayout(unittest.TestCase):
             self.assertFalse(p.Labels.isNull())
             self.assertFalse(_boxes_overlap(circle, p.Labels.BoundBox), rotation)
 
+
+class Test3D(unittest.TestCase):
+    def setUp(self):
+        self.doc = App.newDocument("Teste3D")
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def _solids_at(self, shape, x, y, tol=200):
+        return [s for s in shape.Solids
+                if abs(s.BoundBox.Center.x - x) < tol and abs(s.BoundBox.Center.y - y) < tol]
+
+    def test_runs_drops_and_boxes_from_the_plan(self):
+        from freecad_electrical import model3d
+
+        _house(self.doc)
+        obj = model3d.model3d(self.doc)
+        self.doc.recompute()
+        shape = obj.Shape
+        self.assertFalse(shape.isNull())
+        ceiling = 2800 + model3d.FORRO_GAP
+        # the run from the panel to the light, above the forro
+        self.assertTrue(any(abs(s.BoundBox.Center.z - ceiling) < 30 and s.BoundBox.XLength > 1000 for s in shape.Solids))
+        # the socket at 300 mm: its 4x2 box, and a drop down the wall from the forro to it
+        at_socket = self._solids_at(shape, 0, 3000)
+        self.assertTrue(any(abs(s.BoundBox.Center.z - 300) < 1 and abs(s.BoundBox.ZLength - 101.6) < 1
+                            for s in at_socket))
+        self.assertTrue(any(s.BoundBox.ZLength > 2000 for s in at_socket))
+        # the light: octagonal box on the ceiling
+        self.assertTrue(any(abs(s.BoundBox.ZMin - 2800) < 1 and abs(s.BoundBox.ZLength - 50) < 1
+                            for s in self._solids_at(shape, 3000, 0, 80)))
+        # coloured by circuit
+        self.assertEqual(len(obj.FaceColors), len(shape.Faces))
+        self.assertGreater(len({tuple(round(x, 3) for x in c[:3]) for c in obj.FaceColors}), 3)
+
+    def test_bends_have_the_fixed_radius(self):
+        from freecad_electrical import model3d
+
+        V = App.Vector
+        qd = model.make_point(self.doc, "quadro_terminal", V(0, 0, 0), label="QD1")
+        model.make_circuit(self.doc, 1, "Tomadas", "TUG", panel="QD1")
+        model.make_point(self.doc, "tomada_baixa", V(3000, 2000, 0), 90, circuit=1)
+        model.make_conduit(self.doc, [V(0, 0, 0), V(3000, 0, 0), V(3000, 2000, 0)])
+        obj = model3d.model3d(self.doc)
+        self.doc.recompute()
+        torus = [f for f in obj.Shape.Faces if type(f.Surface).__name__ in ("Toroid", "BSplineSurface")]
+        self.assertTrue(torus)  # the corner of the run is a bend, not a mitre
+        self.assertIsNotNone(qd)
+
+    def test_service_entrance(self):
+        from freecad_electrical import model3d, outputs
+
+        V = App.Vector
+        _house(self.doc)
+        pad = model.make_point(self.doc, "padrao_entrada", V(-3000, 0, 0), 180)
+        run = model.make_conduit(self.doc, [V(-3000, 0, 0), V(0, 0, 0)], installation="enterrado")
+        obj = model3d.model3d(self.doc)
+        self.doc.recompute()
+        e = model.entrance(self.doc, pad)
+        self.assertEqual(e["panel"], "QD1")
+        self.assertTrue(e["category"])
+        self.assertGreater(e["section"], 0)
+        self.assertEqual(run.DiameterSuggested, str(e["conduit"]))
+        self.assertFalse(pad.Labels.isNull())  # its category beside the symbol
+        # the pole, and the buried run below the ground
+        self.assertTrue(any(s.BoundBox.ZLength >= 6999 for s in self._solids_at(obj.Shape, -3000, 0, 300)))
+        self.assertTrue(any(s.BoundBox.ZMax < 0 and s.BoundBox.XLength > 2000 for s in obj.Shape.Solids))
+        rows, _ = outputs.bill_of_materials(self.doc, waste=0.0)
+        items = {item: qty for _, item, _, qty in rows}
+        self.assertTrue(any(i.startswith("Padrão de entrada") for i in items))
+        self.assertTrue(any("(enterrado)" in i for i in items))
+        self.assertEqual(items["Caixa 4x2 de embutir"], 2)  # the switch and the socket: the meter is no 4x2 box
+
+    def test_3d_stays_off_the_plan_sheets(self):
+        from freecad_electrical import model3d
+
+        _house(self.doc)
+        model3d.model3d(self.doc)
+        self.doc.recompute()
+        self.assertNotIn("Instalacao3D", [o.Name for o in sheets.sources(self.doc)])
+
+
+    def test_isometric_page_in_circuit_colours(self):
+        from freecad_electrical import model3d
+
+        _house(self.doc)
+        page, view = sheets.make_3d_page(self.doc, "Casa")
+        self.assertIn("<polyline", view.Symbol)
+        self.assertIn(model3d._hex(model3d.circuit_color(1)), view.Symbol)
+        self.assertTrue(model3d.model3d(self.doc).IsoScale.startswith("1:"))
+        model.make_point(self.doc, "tomada_baixa", App.Vector(1500, 3000, 0), -90, circuit=2)
+        model.make_conduit(self.doc, [App.Vector(0, 3000, 0), App.Vector(1500, 3000, 0)])
+        before = view.Symbol
+        self.doc.recompute()
+        self.assertNotEqual(view.Symbol, before)  # it follows the plan

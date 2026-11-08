@@ -12,6 +12,7 @@ SET(Electrical_SRCS
     freecad_electrical/gui.py
     freecad_electrical/model.py
     freecad_electrical/layout.py
+    freecad_electrical/model3d.py
     freecad_electrical/network.py
     freecad_electrical/outputs.py
     freecad_electrical/sheets.py

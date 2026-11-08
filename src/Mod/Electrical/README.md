@@ -37,6 +37,14 @@ Building electrical plans in FreeCAD, Brazilian conventions:
   Estimates for review, not a design approval.
 * **Sheets that stay up to date**: one plan page per floor (or one for the whole document), and
   pages for the schedule, the single-line diagram and the materials.
+* **3D installation from the plan** ("Instalação 3D"): every run becomes a tube at its level
+  (above the suspended ceiling for ceiling and wall runs, in the floor screed, or buried), with
+  drops down the walls to 4x2 boxes at each item's height, octagonal boxes and lamps on the
+  ceiling, the panel box sized by its ways, risers between floors and fixed-radius bends (6
+  diameters), coloured by circuit and kept up to date. The service entrance ("Padrão de
+  entrada") is a pole with the meter box; a buried conduit ("enterrado") takes the entrance
+  cables, sized for the main breaker of its category, to the panel. An isometric page in the
+  circuit colours goes with the other sheets (drawn as SVG, so it updates in under a second).
 * **Legible plans.** Texts are filled glyphs without an outline (an outline makes small text look
   bold), in the 3D view and on sheets. The power and circuit of each item, and the conductor
   marks of each conduit, go where they overlap the least: around the symbol, along the conduit or
@@ -66,6 +74,7 @@ Deleting an item updates its circuit, the routes, the schedule and the sheets.
   phases, NBR 5410 minimums, demand and entrance categories, conduit sizes.
 * `freecad_electrical/outputs.py`: bill of materials and single-line diagram.
 * `freecad_electrical/layout.py`: where the movable texts go, floor by floor.
+* `freecad_electrical/model3d.py`: the 3D installation and its isometric page.
 * `freecad_electrical/checks.py`, `sheets.py`, `gui.py`, `geometry.py`.
 
 The MCP module (`src/Mod/MCP`) uses this module for its electrical tools.

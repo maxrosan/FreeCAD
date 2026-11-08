@@ -162,6 +162,14 @@ def _motor(p):
     return prims + ([("block", (0, 0), lines, "round", 2.2)] if lines else [])
 
 
+def _meter(p):
+    """Service entrance: the meter box ("M") and the entrance category beside it."""
+    prims = [("poly", [(-3.0, -2.0), (3.0, -2.0), (3.0, 2.0), (-3.0, 2.0)], True, False),
+             ("text", (0, -0.7), "M", "center")]
+    lines = [t for t in (p.get("potencia") or "").split("\n") if t]
+    return prims + ([("block", (0, 0), lines, "round", 3.0)] if lines else [])
+
+
 def _arrow(tip, tail):
     """Filled arrow head at `tip`, pointing away from `tail`."""
     dx, dy = tip[0] - tail[0], tip[1] - tail[1]
@@ -232,6 +240,7 @@ SYMBOLS = {
     "motor": Symbol("Motor (ponto de força)", _motor, QUADROS, power=1, unit="CV", kind="Motor"),
     "caixa_passagem": Symbol("Caixa de passagem na parede", _junction_box, QUADROS),
     "botao_campainha": Symbol("Botão de campainha na parede", _bell_button, QUADROS, height=1300),
+    "padrao_entrada": Symbol("Padrão de entrada (caixa de medição)", _meter, QUADROS, height=1500),
     "circuito_sobe": Symbol("Circuito que sobe", _riser(True), QUADROS),
     "circuito_desce": Symbol("Circuito que desce", _riser(False), QUADROS),
 }

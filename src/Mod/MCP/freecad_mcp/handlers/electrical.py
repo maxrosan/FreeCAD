@@ -264,13 +264,34 @@ def check_installation():
     return checks.check(active_document(create=False))
 
 
+@command("electrical_3d", transaction=True)
+def electrical_3d(page=True):
+    """3D model of the installation from the plan (conduits above the ceiling, in the floor or buried,
+    drops to the boxes, panel, service entrance), coloured by circuit and kept up to date; with an
+    isometric page when `page`."""
+    from freecad_electrical import model3d
+
+    doc = active_document(create=False)
+    obj = model3d.model3d(doc)
+    obj.touch()
+    recompute(doc)
+    out = {"name": obj.Name, "label": obj.Label, "solids": len(obj.Shape.Solids)}
+    box = obj.Shape.BoundBox if not obj.Shape.isNull() else None
+    if box is not None and box.isValid():
+        out["bounding_box_mm"] = [round(v, 1) for v in (box.XMin, box.YMin, box.ZMin, box.XMax, box.YMax, box.ZMax)]
+    if page and not any(p.TypeId == "TechDraw::DrawPage" and p.Name.startswith("Sheet3D") for p in doc.Objects):
+        page_obj = sheets.make_3d_page(doc)[0]
+        out["page"] = {"name": page_obj.Name, "label": page_obj.Label}
+    return out
+
+
 @command("create_electrical_sheets", transaction=True)
-def create_electrical_sheets(sheet="auto", title=None, schedule=True, diagram=True, materials=True):
+def create_electrical_sheets(sheet="auto", title=None, schedule=True, diagram=True, materials=True, model_3d=True):
     """Plan pages (one per floor when items are on several floors), load schedule, single-line
-    diagram and bill of materials, all kept up to date."""
+    diagram, bill of materials and an isometric page of the 3D installation, all kept up to date."""
     doc = active_document(create=False)
     try:
-        pages = sheets.make_electrical_sheets(doc, title, sheet, None, schedule, diagram, materials)
+        pages = sheets.make_electrical_sheets(doc, title, sheet, None, schedule, diagram, materials, model_3d)
     except ValueError as e:
         raise CommandError(str(e)) from e
     return {"pages": [{"kind": kind, "name": page.Name, "label": page.Label} for kind, page in pages]}

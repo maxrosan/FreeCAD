@@ -103,8 +103,8 @@ def sources(doc):
                 or obj.TypeId == "Spreadsheet::Sheet" or is_content(obj):
             continue  # review comments, sheets and tables never go into the drawing
         kind = _type(obj)
-        if kind in ("LayerContainer", "SectionPlane"):
-            continue
+        if kind in ("LayerContainer", "SectionPlane", model.T_MODEL3D):
+            continue  # the 3D installation has its own (isometric) page
         if kind == "Layer":
             found.append(obj)  # layers live in the layer container but are drawn on their own
             continue
@@ -468,6 +468,21 @@ def install_observer():
         App.addDocumentObserver(_observer)
 
 
+def make_3d_page(doc, title=None, sheet="A3"):
+    """A page with the isometric view of the 3D installation, coloured by circuit and kept up to date
+    (drawn by model3d.iso_svg)."""
+    from . import model3d
+
+    obj = model3d.model3d(doc)
+    page, template, size = _page(doc, "Sheet3D", f"Folha - {title or 'Instalação 3D'}", sheet)
+    view = doc.addObject("TechDraw::DrawViewSymbol", "Vista3D")
+    page.addView(view)
+    obj.View = view
+    obj.touch()
+    doc.recompute()
+    return page, view
+
+
 def plan_notes():
     """What the plan leaves unwritten, to go on its sheet."""
     section = f"{model.DEFAULT_SECTION:g}".replace(".", ",")
@@ -487,7 +502,8 @@ def add_notes(doc, page, lines, text_mm=2.5):
     return note
 
 
-def make_electrical_sheets(doc, title=None, sheet="auto", scale=None, schedule=True, diagram=True, materials=True):
+def make_electrical_sheets(doc, title=None, sheet="auto", scale=None, schedule=True, diagram=True, materials=True,
+                           model_3d=True):
     """Every page of the electrical design, all kept up to date: the plan (one page per floor
     when items are on several floors), the load schedule, the single-line diagram and the bill of
     materials. Returns [(kind, page)]."""
@@ -510,4 +526,6 @@ def make_electrical_sheets(doc, title=None, sheet="auto", scale=None, schedule=T
         pages.append(("unifilar", make_diagram_page(doc)[0]))
     if materials:
         pages.append(("materiais", make_materials_page(doc)[0]))
+    if model_3d:
+        pages.append(("3d", make_3d_page(doc, title)[0]))
     return pages

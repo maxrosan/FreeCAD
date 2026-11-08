@@ -78,6 +78,23 @@ def bill_of_materials(doc, waste=WASTE):
     for length, sections in drops.values():
         key = (f"Eletroduto PVC ø{calc.suggest_conduit(sections)} mm", "descidas")
         conduits[key] = conduits.get(key, 0.0) + length
+    entrances = []
+    buried = sum(ed["length"] for ed in net.edges if ed["installation"] == "enterrado")
+    for p in model.points(doc):  # service entrance: from the meter to the panel, buried
+        if p.Symbol != model.ENTRANCE:
+            continue
+        e = model.entrance(doc, p)
+        entrances.append(e)
+        if not e["section"] or not buried:
+            continue
+        panel = next((q for q in net.panel_points() if e["panel"] and e["panel"].lower() in
+                      (q.Label.lower(), (q.Letter or "").lower())), None)
+        length = buried + 2 * network.BURIED_MM + float(p.Height.Value) + (float(panel.Height.Value) if panel else 0.0)
+        neutral = 1 if e["connection"] in (calc.MONO, calc.TRI_N) else 0
+        for mark, n in (("fase", calc.phase_count(e["connection"])), ("neutro", neutral), ("terra", 1)):
+            if n:
+                key = (e["section"], mark)
+                cables[key] = cables.get(key, 0.0) + n * length
     if net.unrouted:
         notes.append(f"{len(net.unrouted)} item(ns) sem eletroduto até o quadro: seus cabos não estão na lista.")
 
@@ -100,7 +117,7 @@ def bill_of_materials(doc, waste=WASTE):
     for p in model.points(doc):
         sym = SYMBOLS[p.Symbol]
         quantity = max(int(p.Quantity or 1), 1)
-        if p.Symbol in network.PANELS or p.Symbol in network.RISERS:
+        if p.Symbol in network.PANELS or p.Symbol in network.RISERS or p.Symbol == model.ENTRANCE:
             continue
         if p.Symbol == "tomada_piso":
             count(boxes, "Caixa de piso 4x4")
@@ -124,6 +141,10 @@ def bill_of_materials(doc, waste=WASTE):
         elif p.Symbol == "botao_campainha":
             count(devices, "Botão de campainha")
     rows += [("Caixas", item, "pç", n) for item, n in sorted(boxes.items())]
+    for e in entrances:
+        if e["category"]:
+            rows.append(("Entrada", f"Padrão de entrada {e['category']} Neoenergia (poste, caixa de medição e "
+                                    f"disjuntor {e['breaker_a']} A) - quadro {e['panel']}", "cj", 1))
     rows += [("Dispositivos", item, "pç", n) for item, n in sorted(devices.items())]
 
     protection, ways = {}, {}

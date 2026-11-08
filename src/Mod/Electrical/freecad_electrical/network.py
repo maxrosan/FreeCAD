@@ -34,6 +34,7 @@ from .symbols import SYMBOLS
 MERGE_MM = 50.0
 ATTACH_PAPER_MM = 8.0
 DEFAULT_CEILING_MM = 2800.0
+BURIED_MM = 600.0  # depth of buried runs (service entrance, outdoor circuits)
 PANELS = ("quadro_terminal", "quadro_geral")
 
 _cache = {}
@@ -71,7 +72,8 @@ def _project(p, a, b):
 
 
 def _cls(installation):
-    return "piso" if installation == "piso" else "alto"
+    """Run level: floor, buried or high (ceiling and walls). Levels meet only at items."""
+    return installation if installation in ("piso", "enterrado") else "alto"
 
 
 def _signature(doc):
@@ -102,7 +104,7 @@ class Network:
         self.doc = doc
         self.ceiling = ceiling_of(doc)
         self.nodes = []        # (x, y, z)
-        self.node_cls = []     # "piso" or "alto" (ceiling and walls): floor and ceiling runs meet only at items
+        self.node_cls = []     # "piso", "enterrado" or "alto" (ceiling and walls): levels meet only at items
         self.edges = []        # dict(u, v, length, conduit, installation)
         self.adjacent = {}     # node -> [(edge index, other node)]
         self.attached = {}     # point name -> node
@@ -200,14 +202,16 @@ class Network:
                                        "conduit": None, "installation": "prumada"})
 
     def _bridge(self, name, xy, attach):
-        """An item where floor and ceiling runs both arrive (a panel, a box) joins them."""
+        """An item where runs of several levels arrive (a panel, a box) joins them: its node is
+        linked to the nearest node of each other level."""
         node = self.attached[name]
-        others = [(i, _dist(n, xy)) for i, n in enumerate(self.nodes)
-                  if self.node_cls[i] != self.node_cls[node] and self._degree_ok(i)]
-        best = min(others, key=lambda t: t[1], default=(None, float("inf")))
-        if best[0] is not None and best[1] <= attach:
-            self.edges.append({"u": node, "v": best[0], "length": _dist(self.nodes[node], self.nodes[best[0]]),
-                               "conduit": None, "installation": "caixa"})
+        for cls in sorted(set(self.node_cls) - {self.node_cls[node]}):
+            others = [(i, _dist(n, xy)) for i, n in enumerate(self.nodes)
+                      if self.node_cls[i] == cls and self._degree_ok(i)]
+            best = min(others, key=lambda t: t[1], default=(None, float("inf")))
+            if best[0] is not None and best[1] <= attach:
+                self.edges.append({"u": node, "v": best[0], "length": _dist(self.nodes[node], self.nodes[best[0]]),
+                                   "conduit": None, "installation": "caixa"})
 
     def _degree_ok(self, node):
         return any(node in (ed["u"], ed["v"]) for ed in self.edges)
@@ -277,6 +281,8 @@ class Network:
         h = float(point.Height.Value)
         if self.node_cls[node] == "piso":
             return h
+        if self.node_cls[node] == "enterrado":
+            return h + BURIED_MM
         return self.ceiling - h if h > 0 else 0.0
 
     def _route(self):

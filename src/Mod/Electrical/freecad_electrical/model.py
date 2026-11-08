@@ -29,10 +29,10 @@ from .symbols import CONDUCTORS, SYMBOLS, TEXT_HEIGHT
 CONTAINER = "InstalacaoEletrica"
 T_INSTALLATION, T_POINT, T_CIRCUIT, T_CONDUIT, T_SCHEDULE = (
     "InstalacaoEletrica", "PontoEletrico", "Circuito", "Eletroduto", "QuadroDeCargas")
-INSTALLATIONS = ["teto", "parede", "piso"]
+INSTALLATIONS = ["teto", "parede", "piso", "enterrado"]
 UNITS = ["VA", "W", "CV"]
-T_MATERIALS, T_DIAGRAM = "ListaDeMateriais", "DiagramaUnifilar"
-OUTPUT_TYPES = (T_MATERIALS, T_DIAGRAM)
+T_MATERIALS, T_DIAGRAM, T_MODEL3D = "ListaDeMateriais", "DiagramaUnifilar", "Instalacao3D"
+OUTPUT_TYPES = (T_MATERIALS, T_DIAGRAM, T_MODEL3D)
 RCD_MODES = ["Automático", "Sim", "Não"]
 FLOOR_TOLERANCE = 500.0  # mm: items and conduits closer than this in height are on the same floor
 DEFAULT_SCALE = 50.0
@@ -146,10 +146,8 @@ class Installation(_Proxy):
     def onChanged(self, obj, prop):
         if prop in ("Scale", "System", "CeilingHeight", "AmbientTemperature", "MaxVoltageDrop") \
                 and not _restoring(obj):
-            # every symbol is drawn at the scale; currents and sizing depend on the others
-            for child in getattr(obj, "Group", []):
-                if type_of(child) in (T_POINT, T_CONDUIT, T_CIRCUIT) + OUTPUT_TYPES:
-                    child.touch()
+            # every symbol is drawn at the scale; currents, sizing and the 3D depend on the others
+            network_changed(obj.Document)
 
 
 def installation(doc, create=True):
@@ -234,6 +232,10 @@ class ElectricalPoint(_Proxy):
 
     def onDocumentRestored(self, obj):
         _ensure(obj, self.SPECS)
+        if list(obj.getEnumerationsOfProperty("Symbol") or []) != list(SYMBOLS):
+            value = obj.Symbol  # files from before new choices were added
+            obj.Symbol = list(SYMBOLS)
+            obj.Symbol = value
 
     def onChanged(self, obj, prop):
         if prop == "Placement" and not getattr(self, "_building", False):
@@ -279,8 +281,56 @@ def point_parts(obj):
     params = {"potencia": calc.power_text(obj.Power, obj.PowerUnit, obj.Quantity) if sym.kind else "",
               "circuito": str(number) if number is not None else "",
               "letra": obj.Letter}
+    if obj.Symbol == "padrao_entrada":
+        params["potencia"] = entrance_text(obj.Document, obj)
     scale = obj.Scale if obj.Scale > 0 else scale_of(obj.Document)
     return sym.build(params), geometry.Frame(obj.Position, obj.Rotation.Value, scale)
+
+
+ENTRANCE = "padrao_entrada"
+
+
+def entrance_panel(doc, point=None):
+    """Panel a service entrance supplies: the panel no feeder comes to nearest to it (for a
+    house, the only one)."""
+    tops = top_panels(doc)
+    if not tops:
+        return None
+    if point is None or len(tops) == 1:
+        return tops[0]
+
+    def distance(name):
+        item = next((q for q in points(doc) if q.Symbol in ("quadro_terminal", "quadro_geral")
+                     and name.lower() in (q.Label.lower(), (q.Letter or "").lower())), None)
+        return (item.Position - point.Position).Length if item is not None else float("inf")
+
+    return min(tops, key=distance)
+
+
+def entrance(doc, point=None):
+    """Service entrance supplying the panel of `point` (a padrão de entrada): category and main
+    breaker (Neoenergia DIS-NOR-030), and the cables and conduit from the meter to the panel:
+    phases, neutral and earth sized for the main breaker (method B1, on the safe side for a
+    buried run)."""
+    panel = entrance_panel(doc, point)
+    summary = demand_summary(doc, panel)
+    breaker = summary["main_breaker_a"] or 0
+    connection = summary["connection"]
+    section = calc.size_conductor(breaker, "Alimentador", connection)[0] if breaker else 0.0
+    cables = calc.phase_count(connection) + (1 if connection in (calc.MONO, calc.TRI_N) else 0) + 1
+    return {"panel": panel or "", "category": summary["category"], "breaker_a": breaker,
+            "connection": connection, "section": section, "cables": cables,
+            "conduit": calc.suggest_conduit([section] * cables) if section else 0}
+
+
+def entrance_text(doc, point=None):
+    try:
+        e = entrance(doc, point)
+    except Exception:
+        return ""
+    if not e["category"]:
+        return ""
+    return f"{e['category']} {e['breaker_a']} A\n{e['cables']}#{e['section']:g} mm²".replace(".", ",")
 
 
 def _absorb_placement(obj):
@@ -783,6 +833,10 @@ class Conduit(_Proxy):
 
     def onDocumentRestored(self, obj):
         _ensure(obj, self.SPECS)
+        if list(obj.getEnumerationsOfProperty("Installation") or []) != list(INSTALLATIONS):
+            value = obj.Installation  # files from before new choices were added
+            obj.Installation = list(INSTALLATIONS)
+            obj.Installation = value
 
     def onChanged(self, obj, prop):
         if prop == "Placement" and not getattr(self, "_building", False):
@@ -819,12 +873,17 @@ class Conduit(_Proxy):
         for a, b in zip(pts, pts[1:]):
             if obj.Installation == "piso":  # dashed: drawn as dashes so sheets show them too
                 shapes += _dashes(a, b, 2.0 * scale, 1.0 * scale)
+            elif obj.Installation == "enterrado":  # dash and dot
+                shapes += _dashes(a, b, 4.0 * scale, 0.8 * scale, 0.4 * scale)
             elif (b - a).Length > 1e-9:
                 shapes.append(Part.LineSegment(a, b).toShape())
         from . import layout
 
         prims, frame, sections, _ = conduit_marks(obj, *layout.marks_of(obj))
         obj.DiameterSuggested = str(calc.suggest_conduit(sections)) if sections else ""
+        if not sections and obj.Installation == "enterrado":
+            conduit = entrance(obj.Document)["conduit"]
+            obj.DiameterSuggested = str(conduit) if conduit else ""
         labels = None
         if prims:
             marks, labels = geometry.build_shape(prims, frame)
@@ -888,6 +947,14 @@ def conduit_marks(obj, fraction, flip=False):
             prims.append(("side", (middle, 0), text, 2.0, -up))
         x += width + GROUP_GAP
     suggested = str(calc.suggest_conduit(sections)) if sections else ""
+    if not content and obj.Installation == "enterrado":
+        # the service entrance run, from the meter to the panel
+        e = entrance(obj.Document)
+        if e["section"]:
+            suggested = str(e["conduit"])
+            text = f"{e['cables']}#{e['section']:g}".replace(".", ",")
+            prims.append(("side", (0, 0), text, 2.0, up))
+            total = along(text) + 0.4
     diameter = obj.Diameter or (suggested if obj.Automatic else "")
     half = total / 2
     if diameter and diameter != DEFAULT_CONDUIT and prims:
@@ -897,7 +964,8 @@ def conduit_marks(obj, fraction, flip=False):
     return prims, frame, sections, half * scale
 
 
-def _dashes(a, b, dash, gap):
+def _dashes(a, b, dash, gap, dot=0.0):
+    """Dashes (and dots between them, when `dot`) along a-b."""
     import Part
 
     d = b - a
@@ -906,10 +974,14 @@ def _dashes(a, b, dash, gap):
         return []
     u = App.Vector(d).normalize()
     out, s = [], 0.0
+    pattern = [dash, dot] if dot else [dash]
+    k = 0
     while s < length:
-        e = min(s + dash, length)
-        out.append(Part.LineSegment(a + u * s, a + u * e).toShape())
+        e = min(s + pattern[k % len(pattern)], length)
+        if e - s > 1e-9:
+            out.append(Part.LineSegment(a + u * s, a + u * e).toShape())
         s = e + gap
+        k += 1
     return out
 
 

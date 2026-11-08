@@ -48,6 +48,10 @@ EXTRA_ICONS = {
                'width="10" height="32" fill="#1565c0"/><rect x="42" y="10" width="10" height="44" fill="#c62828"/></svg>',
     "instalacao": '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><path d="M36 4L14 36h16l-4 24 24-34H34z" '
                   'fill="#f9a825" stroke="black" stroke-width="2"/></svg>',
+    "instalacao3d": '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><path d="M8 20l24-12 24 12v26L32 58 '
+                    '8 46z" fill="#eceff1" stroke="black" stroke-width="2"/><path d="M8 20l24 12 24-12M32 32v26" '
+                    'fill="none" stroke="black" stroke-width="2"/><path d="M14 40c6-10 14-14 18-14s10 6 18-4" '
+                    'fill="none" stroke="#9e9d24" stroke-width="4"/></svg>',
 }
 
 
@@ -221,6 +225,51 @@ class ViewProviderOutput(_ViewProvider):
             page = next((o for o in obj.View.InList if o.TypeId == "TechDraw::DrawPage"), None)
             if page is not None:
                 page.ViewObject.show()
+        return True
+
+
+class ViewProvider3D(_ViewProvider):
+    """The 3D installation: each face coloured by its circuit (FaceColors)."""
+
+    icon_name = "instalacao3d"
+
+    def __init__(self, vobj):
+        super().__init__(vobj)
+        if "Shaded" in vobj.listDisplayModes():
+            vobj.DisplayMode = "Shaded"  # without the black edges of every tube
+
+    def attach(self, vobj):
+        super().attach(vobj)
+        self._paint(vobj)
+
+    def updateData(self, obj, prop):
+        if prop in ("FaceColors", "Shape") and getattr(obj, "ViewObject", None) is not None:
+            self._paint(obj.ViewObject)
+
+    def _paint(self, vobj):
+        obj = vobj.Object
+        colors = list(getattr(obj, "FaceColors", []) or [])
+        if not colors or len(colors) != len(obj.Shape.Faces):
+            return
+        materials = []
+        cache = {}
+        for c in colors:
+            key = tuple(round(x, 4) for x in c[:3])
+            m = cache.get(key)
+            if m is None:
+                m = App.Material()
+                m.DiffuseColor = key + (0.0,)
+                m.AmbientColor = tuple(x * 0.4 for x in key) + (0.0,)
+                cache[key] = m
+            materials.append(m)
+        try:
+            vobj.ShapeAppearance = materials
+        except Exception:
+            vobj.DiffuseColor = [tuple(c[:3]) for c in colors]
+
+    def doubleClicked(self, vobj):
+        Gui.ActiveDocument.ActiveView.viewIsometric()
+        Gui.SendMsgToActiveView("ViewFit")
         return True
 
 
@@ -805,6 +854,29 @@ class DiagramCommand(_Command):
         existing.ViewObject.Proxy.doubleClicked(existing.ViewObject)
 
 
+class Model3DCommand(_Command):
+    icon_name, text, tip = ("instalacao3d", "Instalação 3D",
+                            "Modelo 3D da instalação: eletrodutos, descidas, caixas, quadro e entrada, pela planta")
+
+    def Activated(self):
+        from . import model3d
+
+        doc = App.ActiveDocument
+        doc.openTransaction("Instalação 3D")
+        try:
+            obj = model3d.model3d(doc)
+            if not any(p.TypeId == "TechDraw::DrawPage" and "3D" in p.Label for p in doc.Objects):
+                sheets.make_3d_page(doc)
+        finally:
+            doc.commitTransaction()
+        obj.touch()
+        doc.recompute()
+        view = Gui.ActiveDocument.ActiveView
+        if hasattr(view, "viewIsometric"):
+            view.viewIsometric()
+            Gui.SendMsgToActiveView("ViewFit")
+
+
 class MaterialsCommand(_Command):
     icon_name, text, tip = "materiais", "Lista de materiais", "Cabos, eletrodutos, caixas, dispositivos e proteção"
 
@@ -891,7 +963,8 @@ class InstallationCommand(_Command):
 
 TOOLS = {"Eletrica_Circuito": CircuitCommand, "Eletrica_Eletroduto": ConduitCommand,
          "Eletrica_QuadroCargas": ScheduleCommand, "Eletrica_Unifilar": DiagramCommand,
-         "Eletrica_Materiais": MaterialsCommand, "Eletrica_Demanda": DemandCommand, "Eletrica_Folhas": SheetCommand,
+         "Eletrica_Materiais": MaterialsCommand, "Eletrica_Demanda": DemandCommand, "Eletrica_3D": Model3DCommand,
+         "Eletrica_Folhas": SheetCommand,
          "Eletrica_Conferir": CheckCommand, "Eletrica_EquilibrarFases": BalanceCommand,
          "Eletrica_Instalacao": InstallationCommand}
 
