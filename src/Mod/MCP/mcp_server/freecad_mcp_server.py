@@ -53,9 +53,14 @@ Reproducing a floor plan from a PDF:
 5. get_screenshot and compare with the PDF; get_document_summary to check sizes.
 Each drawing command is one undo step (undo).
 
-Electrical plans (Brazilian NBR 5444 symbols): set_drawing_scale first (e.g. 50), then
-insert_electrical_symbol for outlets, switches, lights and panels, and draw_conduit for the conduits
-with their conductors (fase, neutro, retorno, terra), circuit number and gauge.
+Electrical plans (Brazilian NBR 5444 symbols; Electrical workbench): items carry data (power,
+circuit, room) and their symbol is drawn from it. set_drawing_scale first (e.g. 50); the default
+system is 380/220 V (set_installation). insert_electrical_symbol with potencia ('100VA', '2x100W',
+'3CV') and circuito (number; created if missing, TUG/Iluminação by symbol); create_circuit for
+two-phase 380 V (Bifásico) or three-phase circuits; draw_conduit with the circuits in it.
+load_summary gives totals, currents and load per phase; rebalance_phases spreads circuits over
+R, S, T; check_installation runs the basic NBR 5410 checks; create_electrical_sheets makes the
+plan and load-schedule pages, which update themselves. Change items with set_electrical_item.
 
 Review comments ("X" balloons the person pins on the drawing with the X button):
 when asked to apply the corrections, call list_review_comments (pending ones), then for each
@@ -484,47 +489,124 @@ ElectricalSymbol = Literal[
     "interruptor_simples", "interruptor_simples_2", "interruptor_simples_3",
     "interruptor_paralelo", "interruptor_intermediario",
     "ponto_luz_teto", "ponto_luz_teto_embutido", "ponto_luz_parede", "luminaria_fluorescente",
-    "quadro_terminal", "quadro_geral", "caixa_passagem", "botao_campainha",
+    "quadro_terminal", "quadro_geral", "motor", "caixa_passagem", "botao_campainha",
     "circuito_sobe", "circuito_desce",
 ]
+CircuitKind = Literal["Iluminação", "TUG", "TUE", "Motor", "Alimentador"]
+Connection = Literal["Monofásico (F+N)", "Bifásico (F+F)", "Trifásico (3F)", "Trifásico (3F+N)"]
 
 
 @tool()
 def list_electrical_symbols() -> dict:
-    """Electrical plan symbols available (Brazilian NBR 5444 convention) and their parameters."""
+    """Electrical symbols (NBR 5444) with their default power, circuit kind and height; circuit kinds,
+    connections and voltage systems."""
     return fc("list_electrical_symbols")
 
 
 @tool()
+def set_installation(system: Literal["380/220 V", "220/127 V"] | None = None, scale: float | None = None,
+                     power_factor: float | None = None) -> dict:
+    """Voltage system of the installation (default 380/220 V), drawing scale N (1:N) of the symbols,
+    and default power factor."""
+    return fc("set_installation", system=system, scale=scale, power_factor=power_factor)
+
+
+@tool()
 def insert_electrical_symbol(symbol: ElectricalSymbol, position: Point, rotation: float = 0,
-                             letra: str | None = None, circuito: str | int | None = None,
-                             potencia: str | None = None, scale: float | None = None,
-                             layer: str = "Elétrica", label: str | None = None) -> dict:
-    """Insert an NBR 5444 symbol in a floor plan, sized for the drawing scale (set_drawing_scale; or
-    `scale` N for 1:N).
+                             letra: str | None = None, circuito: int | None = None,
+                             potencia: str | float | None = None, quantidade: int | None = None,
+                             altura: Length | None = None, comodo: str | None = None,
+                             fator_potencia: float | None = None, label: str | None = None) -> dict:
+    """Insert an electrical item with its data; the NBR 5444 symbol (with power and circuit texts) is drawn
+    from it at the drawing scale.
 
     Wall symbols (tomadas, ponto_luz_parede) start at `position` on the wall face and point along
-    `rotation` (degrees; 0 = +X) into the room. letra: command letter (switches: 'a', or 'ab'/'abc'
-    for 2/3 sections; lights: the switch letter that commands them); circuito: circuit number;
-    potencia: '300VA', '2x100W'... Switches: simples = empty circle, paralelo = filled,
-    intermediario = half filled."""
+    `rotation` (degrees; 0 = +X) into the room. potencia: '100VA', '600VA', '2x100W', '1,5CV' (default:
+    the symbol's). circuito: circuit number (created if missing: TUG for sockets, Iluminação for lights).
+    letra: command letter (switches 'a', 'ab'...; lights: the switch that commands them). altura: mounting
+    height; comodo: room name (default: by position, from BIM spaces)."""
     return fc("insert_electrical_symbol", symbol=symbol, position=position, rotation=rotation, letra=letra,
-              circuito=circuito, potencia=potencia, scale=scale, layer=layer, label=label)
+              circuito=circuito, potencia=potencia, quantidade=quantidade, altura=altura, comodo=comodo,
+              fator_potencia=fator_potencia, label=label)
+
+
+@tool()
+def set_electrical_item(name: str, symbol: ElectricalSymbol | None = None, position: Point | None = None,
+                        rotation: float | None = None, circuito: int | None = None,
+                        potencia: str | float | None = None, quantidade: int | None = None,
+                        letra: str | None = None, altura: Length | None = None, comodo: str | None = None,
+                        fator_potencia: float | None = None) -> dict:
+    """Change an electrical item (only the fields given; circuito 0 removes it from its circuit). The symbol,
+    the circuit totals, the load schedule and the sheets update."""
+    return fc("set_electrical_item", name=name, symbol=symbol, position=position, rotation=rotation,
+              circuito=circuito, potencia=potencia, quantidade=quantidade, letra=letra, altura=altura,
+              comodo=comodo, fator_potencia=fator_potencia)
+
+
+@tool()
+def list_electrical_items(circuito: int | None = None, symbol: ElectricalSymbol | None = None) -> dict:
+    """Electrical items with their data (optionally of one circuit or kind) and all circuits."""
+    return fc("list_electrical_items", circuito=circuito, symbol=symbol)
+
+
+@tool()
+def create_circuit(number: int | None = None, description: str = "", kind: CircuitKind = "TUG",
+                   connection: Connection = "Monofásico (F+N)", phases: str | None = None, panel: str = "QD1",
+                   breaker: int = 0, section: float = 0) -> dict:
+    """Create a circuit. Monofásico = 220 V F+N; Bifásico = 380 V F+F (shower, AC); Trifásico = 380 V
+    (motors, sub-panels). phases: 'R', 'ST', 'RST' (default: the least loaded). breaker (A) and
+    section (mm²): 0 = use the suggested ones."""
+    return fc("create_circuit", number=number, description=description, kind=kind, connection=connection,
+              phases=phases, panel=panel, breaker=breaker, section=section)
+
+
+@tool()
+def set_circuit(number: int, new_number: int | None = None, description: str | None = None,
+                kind: CircuitKind | None = None, connection: Connection | None = None, phases: str | None = None,
+                panel: str | None = None, breaker: int | None = None, section: float | None = None) -> dict:
+    """Change a circuit (only the fields given)."""
+    return fc("set_circuit", number=number, new_number=new_number, description=description, kind=kind,
+              connection=connection, phases=phases, panel=panel, breaker=breaker, section=section)
+
+
+@tool()
+def load_summary() -> dict:
+    """Load of the installation: each circuit (VA, W, current, breaker, section, load per phase, warnings),
+    totals, load and current per phase R/S/T, imbalance, per panel, and items without a circuit."""
+    return fc("load_summary")
+
+
+@tool()
+def rebalance_phases(panel: str | None = None) -> dict:
+    """Redistribute the circuits over phases R, S, T to even out the load (all panels or one)."""
+    return fc("rebalance_phases", panel=panel)
+
+
+@tool()
+def check_installation() -> dict:
+    """Basic NBR 5410 checks: lighting VA and sockets per room (BIM spaces), circuit protection and
+    conductors, phase balance. Estimates for review, not a design approval."""
+    return fc("check_installation")
+
+
+@tool()
+def create_electrical_sheets(sheet: Literal["auto", "A4", "A3", "A2", "A1", "A0"] = "auto",
+                             title: str | None = None) -> dict:
+    """The plan sheet (everything in the document) and the load-schedule page; both update themselves
+    when items are added, changed or deleted."""
+    return fc("create_electrical_sheets", sheet=sheet, title=title)
 
 
 @tool()
 def draw_conduit(points: list[Point], installation: Literal["teto", "parede", "piso"] = "teto",
-                 diameter: str | int | None = None,
-                 conductors: list[Literal["fase", "neutro", "retorno", "terra"]] | None = None,
-                 circuit: str | int | None = None, gauge: str | float | None = None, marks_at: float = 0.5,
-                 scale: float | None = None, layer: str = "Elétrica", label: str | None = None) -> dict:
-    """Conduit (eletroduto) along points in mm: solid in ceiling/wall, dashed in the floor. The conductors
-    inside are marked across it at `marks_at` (0..1 of the length) per NBR 5444: fase crosses the
-    line, neutro crosses with a flag, retorno and terra (T) stand on one side; with the circuit number
-    above and the gauge in mm² below (e.g. 2.5)."""
-    return fc("draw_conduit", points=points, installation=installation, diameter=diameter,
-              conductors=conductors, circuit=circuit, gauge=gauge, marks_at=marks_at, scale=scale,
-              layer=layer, label=label)
+                 circuits: list[int] | None = None, extra: list[Literal["retorno", "fase", "neutro", "terra"]] | None = None,
+                 diameter: str | int | None = None, marks_at: float = 0.5, label: str | None = None) -> dict:
+    """Conduit (eletroduto) along points in mm: solid in ceiling/wall, dashed in the floor. Its conductor marks
+    come from the circuits in it (F+N+T, F+F+T, 3F+T...), each group with the circuit number above and the
+    section below, plus `extra` conductors such as switch returns (["retorno"]). Marks sit at `marks_at`
+    (0..1 of the length)."""
+    return fc("draw_conduit", points=points, installation=installation, circuits=circuits, extra=extra,
+              diameter=diameter, marks_at=marks_at, label=label)
 
 
 # --- review comments ("X") ------------------------------------------------------

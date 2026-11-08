@@ -159,6 +159,9 @@ def set_drawing_scale(denominator):
         raise CommandError("The scale denominator must be positive")
     doc = active_document()
     settings(doc).ScaleDenominator = denominator
+    inst = doc.getObject("InstalacaoEletrica")  # the electrical items are drawn at the same scale
+    if inst is not None:
+        inst.Scale = denominator
     return {"scale": f"1:{denominator:g}"}
 
 

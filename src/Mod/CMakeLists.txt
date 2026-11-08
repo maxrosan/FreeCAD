@@ -42,6 +42,10 @@ if(BUILD_MATERIAL)
   add_subdirectory(Material)
 endif(BUILD_MATERIAL)
 
+if(BUILD_ELECTRICAL)
+  add_subdirectory(Electrical)
+endif(BUILD_ELECTRICAL)
+
 if(BUILD_MCP)
   add_subdirectory(MCP)
 endif(BUILD_MCP)

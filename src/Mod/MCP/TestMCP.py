@@ -167,53 +167,66 @@ class TestElectrical(unittest.TestCase):
     def tearDown(self):
         App.closeDocument(self.doc.Name)
 
-    def _box(self, group):
-        grp = self.doc.getObject(group)
-        box = None
-        for obj in grp.Group:
-            shape = getattr(obj, "Shape", None)
-            if shape is None or shape.isNull():
-                continue
-            if box is None:
-                box = App.BoundBox(shape.BoundBox)
-            else:
-                box.add(shape.BoundBox)
-        return box
-
     def test_every_symbol(self):
-        from freecad_mcp.handlers.electrical import SYMBOLS
+        from freecad_electrical.symbols import SYMBOLS
 
         for i, name in enumerate(SYMBOLS):
             res = call("insert_electrical_symbol", symbol=name, position=[i * 1000, 0], letra="a",
-                       circuito=3, potencia="100VA")
-            self.assertGreater(res["objects"], 1, name)
+                       circuito=3 if SYMBOLS[name].kind else None)
+            self.assertEqual(res["symbol"], name)
             self.assertEqual(res["scale"], "1:50")
+            self.assertFalse(self.doc.getObject(res["name"]).Shape.isNull(), name)
         self.assertIn("Unknown symbol", registry.call("insert_electrical_symbol",
                                                       {"symbol": "nada", "position": [0, 0]})["error"]["message"])
 
     def test_size_follows_the_drawing_scale(self):
         res = call("insert_electrical_symbol", symbol="ponto_luz_teto", position=[2000, 1500])
-        box = self._box(res["group"])
-        self.assertAlmostEqual(box.XLength, 5.0 * 50, places=3)  # Ø5 mm on paper at 1:50
-        self.assertAlmostEqual(box.Center.x, 2000, places=3)
-        res = call("insert_electrical_symbol", symbol="ponto_luz_teto", position=[0, 0], scale=100)
-        self.assertAlmostEqual(self._box(res["group"]).XLength, 500, places=3)
+        circle = [e for e in self.doc.getObject(res["name"]).Shape.Edges
+                  if type(e.Curve).__name__ == "Circle"][0]
+        self.assertAlmostEqual(circle.Curve.Radius * 2, 5.0 * 50, places=3)  # Ø5 mm on paper at 1:50
+        self.assertAlmostEqual(circle.Curve.Center.x, 2000, places=3)
+        call("set_drawing_scale", denominator=100)  # the symbols follow the drawing scale
+        self.doc.recompute()
+        circle = [e for e in self.doc.getObject(res["name"]).Shape.Edges
+                  if type(e.Curve).__name__ == "Circle"][0]
+        self.assertAlmostEqual(circle.Curve.Radius * 2, 500, places=3)
 
     def test_wall_symbol_points_into_the_room(self):
         # a socket on a wall at y = 0, the room on +Y
-        res = call("insert_electrical_symbol", symbol="tomada_baixa", position=[1000, 0], rotation=90)
-        box = self._box(res["group"])
+        res = call("insert_electrical_symbol", symbol="tomada_baixa", position=[1000, 0], rotation=90,
+                   potencia=0)  # no power and no circuit: no texts, only the symbol
+        box = self.doc.getObject(res["name"]).Shape.BoundBox
         self.assertAlmostEqual(box.YMax, (2.0 + 2.4) * 50, places=3)  # stem + triangle
         self.assertAlmostEqual(box.YMin, -0.5 * 50, places=3)         # wall mark behind the wall face
 
-    def test_conduit_with_conductors(self):
+    def test_power_text_and_circuits(self):
+        luz = call("insert_electrical_symbol", symbol="ponto_luz_teto", position=[0, 0], circuito=1,
+                   potencia="2x100W")
+        self.assertEqual((luz["quantity"], luz["power"], luz["unit"]), (2, 100, "W"))
+        call("create_circuit", number=5, description="Chuveiro", kind="TUE", connection="Bifásico (F+F)")
+        ch = call("insert_electrical_symbol", symbol="tomada_alta", position=[0, 3000], rotation=-90,
+                  circuito=5, potencia="5400VA")
+        summary = call("load_summary")
+        c5 = [c for c in summary["circuits"] if c["number"] == 5][0]
+        self.assertAlmostEqual(c5["current_a"], round(5400 / 380, 2), places=2)  # 380 V two-phase
+        self.assertEqual(len(c5["phases"]), 2)
+        self.assertEqual(summary["system"], "380/220 V")
+        call("set_electrical_item", name=ch["name"], potencia="6800VA")
+        c5 = [c for c in call("load_summary")["circuits"] if c["number"] == 5][0]
+        self.assertAlmostEqual(c5["power_va"], 6800)
+        self.assertEqual(c5["breaker_a"], 20)
+        self.assertIn("changes", call("rebalance_phases"))
+
+    def test_conduit_with_circuits(self):
+        call("create_circuit", number=2, kind="TUG")
         res = call("draw_conduit", points=[[0, 0], [3000, 0], [3000, 2000]], installation="piso",
-                   conductors=["fase", "neutro", "terra"], circuit=2, gauge=2.5, diameter=25)
+                   circuits=[2], extra=["retorno"], diameter=25)
         self.assertEqual(res["length_mm"], 5000.0)
-        names = [o.TypeId for o in self.doc.getObject(res["group"]).Group]
-        # wire + fase (1) + neutro (2) + terra (2) lines, and 3 texts
-        self.assertEqual(len(names), 1 + 1 + 2 + 2 + 3)
-        reply = registry.call("draw_conduit", {"points": [[0, 0], [1, 0]], "conductors": ["xyz"]})
+        self.assertEqual(res["circuits"], [2])
+        self.assertEqual(res["extra"], ["retorno"])
+        old = call("draw_conduit", points=[[0, 0], [1000, 0]], conductors=["fase", "retorno"], circuit=2)
+        self.assertEqual(old["extra"], ["retorno"])  # older calls still work
+        reply = registry.call("draw_conduit", {"points": [[0, 0], [1, 0]], "extra": ["xyz"]})
         self.assertIn("Unknown conductor", reply["error"]["message"])
 
 
@@ -231,15 +244,14 @@ class TestReviewComments(unittest.TestCase):
     def test_target_and_surroundings(self):
         from freecad_mcp import review
 
-        line = self.doc.getObject(self.qd["group"]).Group[0]
         c = call("add_review_comment", position=[200, 1500], text="Mover o QDC para perto da porta",
-                 target=line.Name, radius=1000)
+                 target=self.qd["name"], radius=1000)
         self.assertEqual(c["number"], 1)
-        self.assertEqual(c["target"]["name"], self.qd["group"])  # the whole symbol, not one line
+        self.assertEqual(c["target"]["name"], self.qd["name"])
         near = [n["name"] for n in c["surroundings_now"]]
-        self.assertEqual(near[0], self.qd["group"])                # nearest first
-        self.assertIn(self.luz["group"], near)                     # the light 700 mm away
-        self.assertNotIn(self.longe["group"], near)                # the socket 6 m away
+        self.assertEqual(near[0], self.qd["name"])                 # nearest first
+        self.assertIn(self.luz["name"], near)                      # the light 700 mm away
+        self.assertNotIn(self.longe["name"], near)                 # the socket 6 m away
         self.assertTrue(any("Ponto de luz" in s for s in c["surroundings_when_created"]))
         self.assertTrue(review.is_comment(self.doc.getObject(c["name"])))
 
@@ -262,7 +274,7 @@ class TestReviewComments(unittest.TestCase):
         self.assertEqual(call("get_review_comment", number=1)["status"], "Corrigido")
 
     def test_saved_with_the_document_and_kept_off_sheets(self):
-        call("add_review_comment", position=[200, 1500], text="Conferir", target=self.qd["group"])
+        call("add_review_comment", position=[200, 1500], text="Conferir", target=self.qd["name"])
         sheet = call("create_sheet")
         view = self.doc.getObject(sheet["view"])
         self.assertFalse(any(o.Name == "Revisao" or "Comentario" in o.Name for o in view.Source.ElementList))
@@ -273,7 +285,7 @@ class TestReviewComments(unittest.TestCase):
         App.setActiveDocument(self.doc.Name)
         c = call("get_review_comment", number=1)
         self.assertEqual(c["text"], "Conferir")
-        self.assertEqual(c["target"]["name"], self.qd["group"])
+        self.assertEqual(c["target"]["name"], self.qd["name"])
         self.assertEqual(len(c["history"]), 1)
 
 
