@@ -628,3 +628,27 @@ class Test3D(unittest.TestCase):
         before = view.Symbol
         self.doc.recompute()
         self.assertNotEqual(view.Symbol, before)  # it follows the plan
+
+    def test_show_some_circuits(self):
+        from freecad_electrical import model3d
+
+        _house(self.doc)
+        page, view = sheets.make_3d_page(self.doc, "Casa")
+        obj = model3d.model3d(self.doc)
+        everything = len(obj.Shape.Solids)
+        light = model3d._hex(model3d.circuit_color(1))
+        sockets = model3d._hex(model3d.circuit_color(2))
+        model3d.show_circuits(self.doc, [2])
+        self.assertLess(len(obj.Shape.Solids), everything)
+        self.assertIn(sockets, view.Symbol)
+        self.assertNotIn(light, view.Symbol)  # the light circuit is gone, from the 3D and its page
+        self.assertNotIn(App.Vector(3000, 0, 0), [App.Vector(round(s.BoundBox.Center.x), round(s.BoundBox.Center.y), 0)
+                                                   for s in obj.Shape.Solids if s.BoundBox.ZLength < 60])
+        self.assertIn("circuito 2", page.Template.EditableTexts.get(
+            next(k for k in page.Template.EditableTexts if "title" in k.lower()), ""))
+        model3d.show_circuits(self.doc, [1, 2])
+        self.assertEqual(len(obj.Shape.Solids), everything)
+        model3d.show_circuits(self.doc, [])
+        self.assertEqual(len(obj.Shape.Solids), everything)
+        with self.assertRaises(ValueError):
+            model3d.show_circuits(self.doc, [99])

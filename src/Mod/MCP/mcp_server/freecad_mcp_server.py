@@ -632,14 +632,15 @@ def check_installation() -> dict:
 
 
 @tool()
-def electrical_3d(page: bool = True) -> dict:
+def electrical_3d(page: bool = True, circuits: list[int] | None = None) -> dict:
     """3D model of the electrical installation, built from the plan and kept up to date: conduits above the
     ceiling (forro), in the floor or buried, drops down the walls to 4x2 boxes, octagonal boxes for the
     lights, the panel box, risers between floors and the service entrance (pole and meter box, place a
     "padrao_entrada" item and draw a conduit with installation "enterrado" to the panel). Coloured by
     circuit, fixed-radius bends. `page`: also an isometric TechDraw page. See it with
-    get_screenshot(direction="iso")."""
-    return fc("electrical_3d", page=page)
+    get_screenshot(direction="iso"). `circuits`: show only these circuit numbers (one at a time or a
+    few), in the 3D and on its page; [] shows them all again, None keeps the current choice."""
+    return fc("electrical_3d", page=page, circuits=circuits)
 
 
 @tool()

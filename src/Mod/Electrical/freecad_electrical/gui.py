@@ -268,8 +268,7 @@ class ViewProvider3D(_ViewProvider):
             vobj.DiffuseColor = [tuple(c[:3]) for c in colors]
 
     def doubleClicked(self, vobj):
-        Gui.ActiveDocument.ActiveView.viewIsometric()
-        Gui.SendMsgToActiveView("ViewFit")
+        CircuitsView.open(vobj.Object.Document)
         return True
 
 
@@ -854,6 +853,119 @@ class DiagramCommand(_Command):
         existing.ViewObject.Proxy.doubleClicked(existing.ViewObject)
 
 
+class CircuitsView:
+    """Which circuits the 3D installation shows: all, one at a time or a few, applied as you go."""
+
+    _current = None  # the open window (one at a time)
+
+    @classmethod
+    def open(cls, doc):
+        if cls._current is not None:
+            try:
+                cls._current.dlg.close()
+            except Exception:
+                pass
+        cls._current = cls(doc)
+        cls._current.dlg.show()
+        return cls._current
+
+    def __init__(self, doc):
+        from PySide import QtCore, QtGui, QtWidgets
+
+        from . import model3d
+
+        self.doc = doc
+        self.obj = model3d.model3d(doc)
+        self.circuits = model.circuits(doc)
+        self.dlg = QtWidgets.QDialog(Gui.getMainWindow())
+        self.dlg.setWindowTitle("Circuitos no 3D")
+        self.dlg.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        layout = QtWidgets.QVBoxLayout(self.dlg)
+        self.status = QtWidgets.QLabel()
+        layout.addWidget(self.status)
+        self.list = QtWidgets.QListWidget()
+        shown = set(self.obj.VisibleCircuits)
+        for c in self.circuits:
+            item = QtWidgets.QListWidgetItem(f"{c.Number} - {c.Description or c.Kind}")
+            item.setData(QtCore.Qt.UserRole, c.Number)
+            r, g, b = model3d.circuit_color(c.Number)
+            swatch = QtGui.QPixmap(14, 14)
+            swatch.fill(QtGui.QColor(int(r * 255), int(g * 255), int(b * 255)))
+            item.setIcon(QtGui.QIcon(swatch))
+            item.setCheckState(QtCore.Qt.Checked if c.Number in shown else QtCore.Qt.Unchecked)
+            self.list.addItem(item)
+        layout.addWidget(self.list)
+        row = QtWidgets.QHBoxLayout()
+        for text, action in (("Todos", self.show_all), ("◀ Anterior", lambda: self.step(-1)),
+                             ("Próximo ▶", lambda: self.step(1))):
+            button = QtWidgets.QPushButton(text)
+            button.clicked.connect(action)
+            row.addWidget(button)
+        layout.addLayout(row)
+        close = QtWidgets.QPushButton("Fechar")
+        close.clicked.connect(self.dlg.close)
+        layout.addWidget(close)
+        self.list.itemChanged.connect(lambda item: self.apply())
+        self.list.itemDoubleClicked.connect(self.only)
+        self._update_status()
+
+    def checked(self):
+        from PySide import QtCore
+
+        return [self.list.item(i).data(QtCore.Qt.UserRole) for i in range(self.list.count())
+                if self.list.item(i).checkState() == QtCore.Qt.Checked]
+
+    def _set(self, numbers):
+        from PySide import QtCore
+
+        self.list.blockSignals(True)
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            item.setCheckState(QtCore.Qt.Checked if item.data(QtCore.Qt.UserRole) in numbers else QtCore.Qt.Unchecked)
+        self.list.blockSignals(False)
+        self.apply()
+
+    def show_all(self):
+        self._set([])
+
+    def only(self, item):
+        """Double-click: this circuit alone."""
+        from PySide import QtCore
+
+        self._set([item.data(QtCore.Qt.UserRole)])
+
+    def step(self, direction):
+        """One circuit at a time: the next (or previous) one after the circuit shown."""
+        numbers = [c.Number for c in self.circuits]
+        if not numbers:
+            return
+        current = self.checked()
+        if len(current) == 1 and current[0] in numbers:
+            i = (numbers.index(current[0]) + direction) % len(numbers)
+        else:
+            i = 0 if direction > 0 else len(numbers) - 1
+        self._set([numbers[i]])
+        self.list.setCurrentRow(i)
+
+    def apply(self):
+        from . import model3d
+
+        try:
+            model3d.show_circuits(self.doc, self.checked())
+        except ValueError as e:
+            App.Console.PrintWarning(f"Elétrica: {e}\n")
+        self._update_status()
+
+    def _update_status(self):
+        numbers = self.checked()
+        if not numbers:
+            self.status.setText("Mostrando todos os circuitos. Marque um ou mais para ver só eles; "
+                                "duplo clique mostra só aquele.")
+        else:
+            self.status.setText("Mostrando o" + ("s circuitos " if len(numbers) > 1 else " circuito ")
+                                + ", ".join(str(n) for n in numbers) + ".")
+
+
 class Model3DCommand(_Command):
     icon_name, text, tip = ("instalacao3d", "Instalação 3D",
                             "Modelo 3D da instalação: eletrodutos, descidas, caixas, quadro e entrada, pela planta")
@@ -875,6 +987,7 @@ class Model3DCommand(_Command):
         if hasattr(view, "viewIsometric"):
             view.viewIsometric()
             Gui.SendMsgToActiveView("ViewFit")
+        CircuitsView.open(doc)
 
 
 class MaterialsCommand(_Command):

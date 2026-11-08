@@ -265,17 +265,24 @@ def check_installation():
 
 
 @command("electrical_3d", transaction=True)
-def electrical_3d(page=True):
+def electrical_3d(page=True, circuits=None):
     """3D model of the installation from the plan (conduits above the ceiling, in the floor or buried,
     drops to the boxes, panel, service entrance), coloured by circuit and kept up to date; with an
-    isometric page when `page`."""
+    isometric page when `page`. `circuits`: numbers of the circuits to show ([] shows them all; None
+    keeps the current choice)."""
     from freecad_electrical import model3d
 
     doc = active_document(create=False)
     obj = model3d.model3d(doc)
+    if circuits is not None:
+        try:
+            model3d.show_circuits(doc, circuits)
+        except ValueError as e:
+            raise CommandError(str(e)) from e
     obj.touch()
     recompute(doc)
-    out = {"name": obj.Name, "label": obj.Label, "solids": len(obj.Shape.Solids)}
+    out = {"name": obj.Name, "label": obj.Label, "solids": len(obj.Shape.Solids),
+           "circuits_shown": list(obj.VisibleCircuits) or "todos"}
     box = obj.Shape.BoundBox if not obj.Shape.isNull() else None
     if box is not None and box.isValid():
         out["bounding_box_mm"] = [round(v, 1) for v in (box.XMin, box.YMin, box.ZMin, box.XMax, box.YMax, box.ZMax)]

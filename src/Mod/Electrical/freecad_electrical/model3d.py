@@ -49,10 +49,22 @@ PANEL_COLOR = (0.80, 0.80, 0.82)
 CONCRETE = (0.62, 0.62, 0.60)
 
 
+# Kelly's colours of maximum contrast (without white and black), and a few more: circuits up to
+# 20 never share a colour; above that the list repeats with a darker shade.
+PALETTE = ["#f3c300", "#875692", "#f38400", "#a1caf1", "#be0032", "#c2b280", "#008856", "#e68fac",
+           "#0067a5", "#f99379", "#604e97", "#f6a600", "#b3446c", "#dcd300", "#882d17", "#8db600",
+           "#654522", "#e25822", "#2b3d26", "#00a3a3"]
+
+
 def circuit_color(number):
-    """A colour per circuit number, well apart from its neighbours (golden-ratio hues)."""
-    h = (int(number) * 0.618033988749895) % 1.0
-    return colorsys.hsv_to_rgb(h, 0.75, 0.85)
+    """A colour per circuit number, distinct from the other circuits' (up to 20)."""
+    n = int(number)
+    text = PALETTE[(n - 1) % len(PALETTE)]
+    rgb = tuple(int(text[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+    if (n - 1) // len(PALETTE) % 2:
+        h, s, v = colorsys.rgb_to_hsv(*rgb)
+        rgb = colorsys.hsv_to_rgb(h, s, v * 0.6)
+    return rgb
 
 
 def _section(c):
@@ -69,18 +81,40 @@ def _diameter(text, default=20.0):
 class _Model:
     """Collects the solids and their colours."""
 
-    def __init__(self, doc):
+    def __init__(self, doc, only=None):
         import Part
 
         self.Part = Part
         self.doc = doc
+        self.only = {int(n) for n in only} if only else None  # circuit numbers shown (None: all)
         self.net = network.network(doc)
         self.ceiling = self.net.ceiling
         self.solids = []      # (solid, colour)
         self.segments = []    # [p, q, diameter, colour]: tubes before the bends are cut in
         self.flat = []        # for the isometric page: ("line", [points], diameter, colour),
         #                       ("poly", [points], colour), ("circle", centre, radius, colour)
-        self.length = {}      # colour group -> mm, for the summary
+
+    def shown(self, circuit):
+        return self.only is None or (circuit is not None and circuit.Number in self.only)
+
+    def panel_shown(self, p):
+        """A panel shows when one of the circuits shown starts there or feeds it."""
+        if self.only is None:
+            return True
+        names = {p.Label.lower(), (p.Letter or "").lower()} - {""}
+        return any(c.Number in self.only and ((c.Panel or "").lower() in names or
+                                              (getattr(c, "Feeds", "") or "").lower() in names)
+                   for c in model.circuits(self.doc))
+
+    def item_shown(self, p):
+        if self.only is None:
+            return True
+        if p.Symbol in network.PANELS:
+            return self.panel_shown(p)
+        if p.Symbol == "padrao_entrada" or p.Symbol in network.RISERS:
+            return False
+        circuit = self.net.switch_circuit.get(p.Name) if network.is_switch(p.Symbol) else p.Circuit
+        return self.shown(circuit)
 
     # -- levels ----------------------------------------------------------------------------------
 
@@ -98,6 +132,10 @@ class _Model:
     def edge_style(self, e):
         ed = self.net.edges[e]
         content = self.net.conductors(e)
+        if self.only is not None:
+            content = [(c, marks) for c, marks in content if c.Number in self.only]
+            if not content:
+                return None  # none of the circuits shown passes here
         sections = [_section(c) for c, marks in content for _ in marks]
         conduit = self.doc.getObject(ed["conduit"]) if ed.get("conduit") else None
         if conduit is not None and (conduit.Diameter or conduit.DiameterSuggested):
@@ -114,7 +152,10 @@ class _Model:
             kind = ed["installation"]
             if kind == "caixa":
                 continue  # floor and ceiling runs joined at an item: its drops do it
-            diameter, color = self.edge_style(e)
+            style = self.edge_style(e)
+            if style is None:
+                continue
+            diameter, color = style
             p, q = self.level(ed["u"]), self.level(ed["v"])
             if kind == "prumada":
                 low, high = (p, q) if p.z <= q.z else (q, p)
@@ -134,6 +175,8 @@ class _Model:
             sections.setdefault(p.Name, []).extend([_section(c)] * len(marks))
             own.setdefault(p.Name, c)
         for p in model.points(self.doc):
+            if not self.item_shown(p):
+                continue
             box = self.item(p)
             node = self.net.attached.get(p.Name)
             if node is None or box is None:
@@ -456,8 +499,16 @@ class Installation3D(model._Proxy):
         obj.addProperty("App::PropertyLink", "View", g, "Vista isométrica na folha")
         obj.addProperty("App::PropertyString", "IsoScale", g, "Escala da vista isométrica")
         obj.setEditorMode("IsoScale", 1)
+        self._visible(obj)
+
+    @staticmethod
+    def _visible(obj):
+        if "VisibleCircuits" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyIntegerList", "VisibleCircuits", "Instalação 3D",
+                            "Circuitos mostrados (vazio: todos)")
 
     def onDocumentRestored(self, obj):
+        self._visible(obj)
         if "View" not in obj.PropertiesList:
             obj.addProperty("App::PropertyLink", "View", "Instalação 3D", "Vista isométrica na folha")
         if "IsoScale" not in obj.PropertiesList:
@@ -465,7 +516,8 @@ class Installation3D(model._Proxy):
             obj.setEditorMode("IsoScale", 1)
 
     def execute(self, obj):
-        built = _Model(obj.Document)
+        only = list(getattr(obj, "VisibleCircuits", []) or [])
+        built = _Model(obj.Document, only)
         built.build()
         shape, colors = build(obj.Document, built)
         obj.Shape = shape
@@ -484,9 +536,28 @@ class Installation3D(model._Proxy):
             view.Symbol = svg
         outputs.fit_view(view, width, height)
         if page is not None:
-            sheets.fill_title_block(page.Template, getattr(page, "Label", "").replace("Folha - ", ""), obj.IsoScale)
+            title = getattr(page, "Label", "").replace("Folha - ", "")
+            if only:
+                title += " - circuito" + ("s " if len(only) > 1 else " ") + ", ".join(str(n) for n in sorted(only))
+            sheets.fill_title_block(page.Template, title, obj.IsoScale)
         view.recompute()
         view.purgeTouched()
+
+
+def show_circuits(doc, numbers=None):
+    """Show only the circuits `numbers` in the 3D installation (and its isometric page); None or
+    an empty list shows them all."""
+    obj = model3d(doc)
+    wanted = sorted({int(n) for n in numbers or []})
+    known = {c.Number for c in model.circuits(doc)}
+    unknown = [n for n in wanted if n not in known]
+    if unknown:
+        raise ValueError(f"Circuito(s) inexistente(s): {unknown}")
+    if list(obj.VisibleCircuits) != wanted:
+        obj.VisibleCircuits = wanted
+    obj.touch()
+    doc.recompute()
+    return obj
 
 
 def model3d(doc, create=True):
