@@ -229,6 +229,29 @@ class TestElectrical(unittest.TestCase):
         reply = registry.call("draw_conduit", {"points": [[0, 0], [1, 0]], "extra": ["xyz"]})
         self.assertIn("Unknown conductor", reply["error"]["message"])
 
+    def test_automatic_conduits_floors_demand_and_materials(self):
+        for number, panel, nivel in ((1, "QD1", 0), (11, "QD2", "3 m")):
+            call("insert_electrical_symbol", symbol="quadro_terminal", position=[0, 0], label=panel, nivel=nivel)
+            call("create_circuit", number=number, kind="Iluminação", panel=panel)
+            call("insert_electrical_symbol", symbol="ponto_luz_teto", position=[3000, 0], circuito=number,
+                 letra="a", nivel=nivel)
+            call("insert_electrical_symbol", symbol="interruptor_simples", position=[3000, 2000], circuito=number,
+                 letra="a", nivel=nivel)
+            call("draw_conduit", points=[[0, 0], [3000, 0]], nivel=nivel)
+            res = call("draw_conduit", points=[[3000, 0], [3000, 2000]], nivel=nivel)
+            self.assertTrue(res["automatic"])
+            self.assertEqual(res["conductors"], [{"circuit": number, "marks": ["fase", "retorno"]}])
+        self.assertEqual(len(call("list_electrical_items")["floors"]), 2)
+        call("create_circuit", number=9, description="Chuveiro", kind="TUE", connection="Bifásico (F+F)")
+        call("insert_electrical_symbol", symbol="tomada_alta", position=[0, 3000], rotation=-90, circuito=9,
+             potencia="5400W")
+        entrance = call("demand_summary")["entrances"][0]
+        self.assertEqual(entrance["category"], "T5")  # a 380 V shower needs a three-phase entrance
+        items = call("bill_of_materials")["items"]
+        self.assertTrue(any("retorno" in i["item"] for i in items))
+        pages = call("create_electrical_sheets")["pages"]
+        self.assertEqual([p["kind"] for p in pages].count("planta"), 2)  # one plan page per floor
+
 
 class TestReviewComments(unittest.TestCase):
     def setUp(self):

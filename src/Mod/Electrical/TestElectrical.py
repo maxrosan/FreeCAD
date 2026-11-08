@@ -139,7 +139,7 @@ class TestModel(unittest.TestCase):
         self.assertEqual(sheet.get("A5"), 1)
         self.assertIn("Motor", sheet.get("B5"))
         self.assertAlmostEqual(float(sheet.get("I5")), round(c1.Current, 1), places=1)
-        self.assertTrue(sched.LastCell.startswith("N"))
+        self.assertTrue(sched.LastCell.startswith("Q"))
         c2 = model.find_circuit(self.doc, 2)
         self.assertTrue(any("fase" in w for w in c2.Warnings))  # two-phase circuit without phases
         changes = model.rebalance_phases(self.doc)
@@ -238,3 +238,227 @@ class TestSheets(unittest.TestCase):
         self.doc.recompute()
         sheets.follow_schedule(self.doc)
         self.assertNotEqual(table.CellEnd, first)
+
+
+class TestSizing(unittest.TestCase):
+    def test_voltage_drop_and_conductor(self):
+        # 2400 VA at 220 V over 60 m: 2.5 mm² drops 5.4 %, 4 mm² 3.3 %
+        amps = calc.current(2400, calc.MONO, "380/220 V")
+        self.assertAlmostEqual(calc.voltage_drop(amps, 60, 2.5, calc.MONO, "380/220 V"),
+                               2 * 0.0225 * 60 * amps / 2.5 / 220 * 100)
+        self.assertEqual(calc.size_conductor(16, "TUG", calc.MONO, amps, 60), (4, "queda de tensão"))
+        self.assertEqual(calc.size_conductor(16, "TUG", calc.MONO, amps, 10), (2.5, "mínimo"))
+        # three circuits in one conduit: 24 A x 0.70 = 16.8 A still carries 16 A; four do not (15.6 A)
+        self.assertEqual(calc.size_conductor(16, "TUG", calc.MONO, factor=calc.grouping_factor(3))[0], 2.5)
+        self.assertEqual(calc.size_conductor(16, "TUG", calc.MONO, factor=calc.grouping_factor(4))[0], 4)
+        self.assertEqual(calc.temperature_factor(40), 0.87)
+        # a lightly loaded circuit does not count in the grouping (NBR 5410 6.2.5.5.6)
+        self.assertTrue(calc.negligible_in_group(2.0, 1.5, calc.MONO, calc.grouping_factor(4)))
+        self.assertFalse(calc.negligible_in_group(8.0, 2.5, calc.MONO, calc.grouping_factor(4)))
+        self.assertEqual(calc.rcd_reason("cozinha", None, 1300, False), "")  # a switch is not a point of use
+
+    def test_rcd_rule(self):
+        self.assertTrue(calc.rcd_reason("banheiro", "TUG", 300, False))
+        self.assertTrue(calc.rcd_reason("externa", "TUG", 300, False))
+        self.assertEqual(calc.rcd_reason("banheiro", "Iluminação", 0, True), "")  # ceiling light exempt
+        self.assertEqual(calc.rcd_reason("seco", "TUG", 300, False), "")
+        self.assertEqual(calc.room_category("Garagem"), "externa")
+
+    def test_conduit_size(self):
+        self.assertEqual(calc.suggest_conduit([2.5] * 3), 20)
+        self.assertEqual(calc.suggest_conduit([2.5] * 9), 25)
+        self.assertEqual(calc.suggest_conduit([10] * 4), 25)
+
+    def test_demand_and_category(self):
+        # DIS-NOR-030, example 2: 2.8 kW of sockets + 1 kW of lights, 2 showers, 1 tap, 1 dryer
+        items = [(calc.G_LIGHT, 1, 3.8, 3.8), (calc.G_HEATER, 2, 8.0, 8.0), (calc.G_HEATER, 1, 3.0, 3.0),
+                 (calc.G_APPLIANCE, 1, 2.5, 2.5)]
+        result = calc.demand(items)
+        expected = 3.8 * 0.59 + 11.0 * 0.84 + 2.5 * 1.0
+        self.assertAlmostEqual(result["kva"], round(expected, 2))
+        cat = calc.service_category("380/220 V", 17.3, result["kva"], 1)
+        self.assertEqual(cat["category"], "T5")  # above the 15 kW of M3: three-phase, demand <= 32 kVA
+        self.assertEqual(cat["breaker_a"], 50)
+        self.assertEqual(calc.service_category("380/220 V", 7.8, 5, 1)["category"], "M2")
+        self.assertEqual(calc.service_category("380/220 V", 7.8, 5, 2)["category"], "T5")  # a 380 V load
+        self.assertEqual(calc.service_category("220/127 V", 7.8, 5, 1)["category"], "M1")
+        self.assertEqual(calc.service_category("380/220 V", 30, 45, 3)["category"], "T7")
+        self.assertIsNone(calc.service_category("380/220 V", 90, 80, 3)["category"])
+        # motors: the biggest at 100 %, the others at 50 %
+        self.assertAlmostEqual(calc.demand([(calc.G_MOTOR, 2, 1.7, 2.0)])["kva"], 1.5)
+        self.assertEqual(calc.demand_group("TUE", "Chuveiro elétrico"), calc.G_HEATER)
+        self.assertEqual(calc.demand_group("TUE", "Tomada", "Ar-condicionado quarto"), calc.G_AIR)
+
+
+def _space(doc, label, x0, y0, x1, y1, z=0.0, height=2800):
+    import Arch
+    import Draft
+
+    outline = Draft.make_wire([App.Vector(x0, y0, z), App.Vector(x1, y0, z), App.Vector(x1, y1, z),
+                               App.Vector(x0, y1, z)], closed=True, face=True)
+    volume = doc.addObject("Part::Extrusion", "Volume")
+    volume.Base = outline
+    volume.Dir = App.Vector(0, 0, height)
+    volume.Solid = True
+    doc.recompute()
+    space = Arch.makeSpace(volume)
+    space.Label = label
+    doc.recompute()
+    return space
+
+
+def _house(doc, z=0.0, first=1, panel="QD1"):
+    """A panel, a light with its switch and a socket, joined by automatic conduits."""
+    V = App.Vector
+    qd = model.make_point(doc, "quadro_terminal", V(0, 0, z), label=panel)
+    model.make_circuit(doc, first, "Iluminação", "Iluminação", panel=panel)
+    model.make_circuit(doc, first + 1, "Tomadas", "TUG", panel=panel)
+    light = model.make_point(doc, "ponto_luz_teto", V(3000, 0, z), circuit=first, letter="a")
+    switch = model.make_point(doc, "interruptor_simples", V(3000, 2000, z), circuit=first, letter="a")
+    socket = model.make_point(doc, "tomada_baixa", V(0, 3000, z), 0, circuit=first + 1)
+    a = model.make_conduit(doc, [V(0, 0, z), V(3000, 0, z)])
+    b = model.make_conduit(doc, [V(3000, 0, z), V(3000, 2000, z)])
+    c = model.make_conduit(doc, [V(0, 0, z), V(0, 3000, z)])
+    return qd, light, switch, socket, a, b, c
+
+
+class TestNetwork(unittest.TestCase):
+    def setUp(self):
+        self.doc = App.newDocument("TestRede")
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def test_conductors_from_the_items(self):
+        from freecad_electrical import network
+
+        qd, light, switch, socket, a, b, c = _house(self.doc)
+        self.doc.recompute()
+        self.assertTrue(a.Automatic)
+        net = network.network(self.doc)
+
+        def marks(conduit):
+            return [(circ.Number, m) for circ, m in net.conductors(net.edge_at(conduit, 0.5))]
+
+        self.assertEqual(marks(a), [(1, ["fase", "neutro", "terra"])])
+        self.assertEqual(marks(b), [(1, ["fase", "retorno"])])  # to the switch: phase and return
+        self.assertEqual(marks(c), [(2, ["fase", "neutro", "terra"])])
+        c1, c2 = model.find_circuit(self.doc, 1), model.find_circuit(self.doc, 2)
+        self.assertAlmostEqual(c1.LengthUsed, 3.0 + 1.3)  # run + panel drop (2.8 - 1.5 m)
+        self.assertAlmostEqual(c2.LengthUsed, 3.0 + 2.5 + 1.3)  # run + drop to the socket at 0.3 m
+        self.assertEqual(c1.Grouping, 1)
+        self.assertFalse(b.Shape.isNull())
+
+    def test_long_circuit_gets_a_bigger_conductor(self):
+        qd, light, switch, socket, a, b, c = _house(self.doc)
+        model.set_point(socket, power=2400)
+        c2 = model.find_circuit(self.doc, 2)
+        c2.Length = 60
+        self.doc.recompute()
+        self.assertEqual(c2.SectionSuggested, 4)
+        self.assertEqual(c2.SectionReason, "queda de tensão")
+        self.assertLess(c2.VoltageDrop, 4.0)
+        c2.Section = 2.5
+        self.doc.recompute()
+        self.assertTrue(any("Queda de tensão" in w for w in c2.Warnings))
+
+    def test_moving_an_item_updates_lengths(self):
+        qd, light, switch, socket, a, b, c = _house(self.doc)
+        self.doc.recompute()
+        c2 = model.find_circuit(self.doc, 2)
+        before = c2.LengthUsed
+        c.Points = [App.Vector(0, 0, 0), App.Vector(0, 6000, 0)]
+        model.set_point(socket, position=App.Vector(0, 6000, 0))
+        self.doc.recompute()
+        self.assertAlmostEqual(c2.LengthUsed, before + 3.0)
+
+    def test_bathroom_needs_rcd(self):
+        _space(self.doc, "Banheiro", -1000, 2000, 2000, 4000)
+        _house(self.doc)
+        self.doc.recompute()
+        c2 = model.find_circuit(self.doc, 2)
+        self.assertTrue(c2.HasRCD)
+        self.assertIn("Banheiro", c2.RCDReason)
+        self.assertFalse(model.find_circuit(self.doc, 1).HasRCD)
+        c2.RCD = "Não"
+        self.doc.recompute()
+        self.assertTrue(any("DR" in w for w in c2.Warnings))
+
+    def test_two_floors_and_feeder(self):
+        from freecad_electrical import network
+
+        V = App.Vector
+        _house(self.doc, 0.0, 1, "QD1")
+        _house(self.doc, 3000.0, 11, "QD2")
+        model.make_circuit(self.doc, 20, "Alimentador QD2", "Alimentador", calc.TRI_N, panel="QD1", feeds="QD2")
+        # riser from QD1 to QD2: "circuito sobe" over QD1, "circuito desce" under QD2
+        model.make_point(self.doc, "circuito_sobe", V(0, 0, 0))
+        model.make_point(self.doc, "circuito_desce", V(0, 0, 3000))
+        _space(self.doc, "Quarto 1", -500, -500, 4000, 4000, 0.0)
+        _space(self.doc, "Quarto 2", -500, -500, 4000, 4000, 3000.0)
+        self.doc.recompute()
+        self.assertEqual(len(model.floors(self.doc)), 2)
+        net = network.network(self.doc)
+        self.assertTrue(any(ed["installation"] == "prumada" for ed in net.edges))  # the riser joins the floors
+        feeder = model.find_circuit(self.doc, 20)
+        qd2_va = sum(c.PowerVA for c in model.panel_circuits(self.doc, "QD2"))
+        self.assertAlmostEqual(feeder.PowerVA, qd2_va, places=0)
+        self.assertGreater(feeder.DemandVA, 0)
+        self.assertLessEqual(feeder.DemandVA, qd2_va + 1e-6)
+        # QD1 -> riser (3 m) -> QD2, plus the drops at both panels
+        self.assertAlmostEqual(feeder.LengthUsed, 3.0 + 1.3 + 1.3)
+        riser = [e for e, ed in enumerate(net.edges) if ed["installation"] == "prumada"][0]
+        self.assertIn(20, [c.Number for c, _ in net.conductors(riser)])
+        self.assertEqual(model.top_panels(self.doc), ["QD1"])
+        summary = model.load_summary(self.doc)
+        self.assertAlmostEqual(summary["total_va"],
+                               round(sum(c.PowerVA for c in model.circuits(self.doc) if not c.Feeds), 1))
+        report = checks.check(self.doc)
+        rooms = {r["room"]: r for r in report["rooms"]}
+        self.assertEqual(rooms["Quarto 1"]["sockets"], 1)  # each floor counts its own items
+        self.assertEqual(rooms["Quarto 2"]["sockets"], 1)
+        ranges = sheets.floor_ranges(self.doc)
+        self.assertEqual(len(ranges), 2)
+        upper = sheets.floor_sources(self.doc, *ranges[1][1:])
+        self.assertTrue(upper)
+        self.assertTrue(all(o.Shape.BoundBox.ZMin >= 2000 for o in upper if hasattr(o, "Shape")))
+
+
+class TestOutputs(unittest.TestCase):
+    def setUp(self):
+        self.doc = App.newDocument("TestSaidas")
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def test_materials_and_diagram(self):
+        from freecad_electrical import outputs
+
+        _house(self.doc)
+        self.doc.recompute()
+        rows, notes = outputs.bill_of_materials(self.doc, waste=0.0)
+        items = {item: qty for _, item, _, qty in rows}
+        # circuit 1 phase: 3 m of conduit + 2 m to the switch, drops to the switch (1.5 m) and the panel (1.3 m)
+        self.assertEqual(items["Cabo flexível de cobre 750 V 1,5 mm² - fase"], math.ceil(3 + 2 + 1.5 + 1.3))
+        self.assertIn("Cabo flexível de cobre 750 V 1,5 mm² - retorno", items)
+        self.assertEqual(items["Tomada 2P+T 10 A (NBR 14136)"], 1)
+        self.assertTrue(any(i.startswith("Disjuntor geral") for i in items))
+        self.assertTrue(any(i.startswith("Quadro de distribuição QD1") for i in items))
+        obj = outputs.materials(self.doc)
+        self.doc.recompute()
+        self.assertTrue(obj.LastCell.startswith("D"))
+        svg, width, height = outputs.unifilar_svg(self.doc)
+        self.assertIn("QUADRO QD1", svg)
+        self.assertIn("Tomadas", svg)
+        self.assertIn("kWh", svg)
+
+    def test_all_sheets(self):
+        _house(self.doc)
+        self.doc.recompute()
+        pages = sheets.make_electrical_sheets(self.doc)
+        self.assertEqual([k for k, _ in pages], ["planta", "quadro_de_cargas", "unifilar", "materiais"])
+        view = [o for o in self.doc.Objects if o.TypeId == "TechDraw::DrawViewSymbol"][0]
+        self.assertIn("QUADRO QD1", view.Symbol)
+        model.make_point(self.doc, "tomada_baixa", App.Vector(0, 2000, 0), 0, circuit=7, label="Tomada nova")
+        self.doc.recompute()
+        self.assertIn(">7<", view.Symbol)  # the new circuit is on the diagram

@@ -52,10 +52,13 @@ starts FreeCAD outside that tree (through WMI if needed), so the drawing stays o
   (doors and windows hosted in walls), `make_space` (rooms with area).
 * Electrical plans, through the Electrical module (`src/Mod/Electrical`, the "Elétrica"
   workbench): `insert_electrical_symbol` and `set_electrical_item` (NBR 5444 items that carry
-  power, circuit and room), `create_circuit`/`set_circuit` (single-phase 220 V, two- and
-  three-phase 380 V), `draw_conduit` (conductor marks from its circuits), `load_summary`,
-  `rebalance_phases`, `check_installation` (basic NBR 5410), `create_electrical_sheets` (plan and
-  load-schedule pages that update themselves) and `set_installation` (380/220 V by default).
+  power, circuit and room, on any floor), `create_circuit`/`set_circuit` (single-phase 220 V,
+  two- and three-phase 380 V, feeders between panels), `draw_conduit` (automatic: circuits and
+  conductors from the items it reaches), `load_summary`, `demand_summary` (demand and Cosern /
+  Neoenergia entrance category), `rebalance_phases`, `check_installation` (NBR 5410: room
+  minimums, voltage drop, RCDs), `bill_of_materials`, `create_electrical_sheets` (plan per floor,
+  load schedule, single-line diagram and materials pages that update themselves) and
+  `set_installation` (380/220 V by default).
 * Review comments: the **X** button (File toolbar and Tools menu of every workbench) pins a
   comment where you click next: a dot with "X<n>: text", red when open, green when fixed,
   orange when reopened. Each comment records the object under the click, what was around it

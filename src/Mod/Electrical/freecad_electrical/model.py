@@ -31,6 +31,10 @@ T_INSTALLATION, T_POINT, T_CIRCUIT, T_CONDUIT, T_SCHEDULE = (
     "InstalacaoEletrica", "PontoEletrico", "Circuito", "Eletroduto", "QuadroDeCargas")
 INSTALLATIONS = ["teto", "parede", "piso"]
 UNITS = ["VA", "W", "CV"]
+T_MATERIALS, T_DIAGRAM = "ListaDeMateriais", "DiagramaUnifilar"
+OUTPUT_TYPES = (T_MATERIALS, T_DIAGRAM)
+RCD_MODES = ["Automático", "Sim", "Não"]
+FLOOR_TOLERANCE = 500.0  # mm: items and conduits closer than this in height are on the same floor
 DEFAULT_SCALE = 50.0
 DEFAULT_PF = 0.92
 
@@ -70,6 +74,42 @@ def _readonly(obj, *props):
         obj.setEditorMode(prop, 1)
 
 
+def _ensure(obj, specs, record=True):
+    """Add the properties of `specs` that `obj` lacks (files saved by older versions).
+    specs: [(type, name, group, doc, default, editor mode)]."""
+    added = False
+    for kind, name, group, doc, default, mode in specs:
+        if name in obj.PropertiesList:
+            continue
+        added = True
+        obj.addProperty(kind, name, group, doc)
+        if isinstance(default, list):
+            setattr(obj, name, default)
+            setattr(obj, name, default[0])
+        elif default is not None:
+            setattr(obj, name, default)
+        if mode:
+            obj.setEditorMode(name, mode)
+    if added and record:
+        _MIGRATED.setdefault(obj.Document.Name if obj.Document else "", []).append(obj.Name)
+
+
+def _restoring(obj):
+    doc = getattr(obj, "Document", None)
+    return doc is None or getattr(doc, "Restoring", False)
+
+
+def network_changed(doc):
+    """Something that changes routing or totals changed (an item moved, a conduit was drawn...):
+    recompute circuits, automatic conduits and the generated outputs."""
+    if doc is None or getattr(doc, "Restoring", False):
+        return
+    for obj in doc.Objects:
+        kind = type_of(obj)
+        if kind == T_CIRCUIT or kind in OUTPUT_TYPES or (kind == T_CONDUIT and getattr(obj, "Automatic", False)):
+            obj.touch()
+
+
 # --- installation -----------------------------------------------------------------------
 
 
@@ -85,11 +125,24 @@ class Installation(_Proxy):
                         "Escala do desenho (N de 1:N): tamanho dos símbolos e textos").Scale = DEFAULT_SCALE
         obj.addProperty("App::PropertyFloat", "PowerFactor", "Instalação",
                         "Fator de potência padrão dos itens").PowerFactor = DEFAULT_PF
+        _ensure(obj, self.SPECS, record=False)
+
+    SPECS = [("App::PropertyLength", "CeilingHeight", "Instalação",
+              "Pé-direito: altura dos eletrodutos de teto, para as descidas até os pontos", 2800.0, 0),
+             ("App::PropertyFloat", "AmbientTemperature", "Instalação",
+              "Temperatura ambiente (°C), para o fator de correção dos condutores", 30.0, 0),
+             ("App::PropertyFloat", "MaxVoltageDrop", "Instalação",
+              "Queda de tensão máxima dos circuitos terminais (%)", calc.MAX_VOLTAGE_DROP, 0)]
+
+    def onDocumentRestored(self, obj):
+        _ensure(obj, self.SPECS)
 
     def onChanged(self, obj, prop):
-        if prop in ("Scale", "System"):  # every symbol is drawn at the scale; currents depend on the system
+        if prop in ("Scale", "System", "CeilingHeight", "AmbientTemperature", "MaxVoltageDrop") \
+                and not _restoring(obj):
+            # every symbol is drawn at the scale; currents and sizing depend on the others
             for child in getattr(obj, "Group", []):
-                if type_of(child) in (T_POINT, T_CONDUIT, T_CIRCUIT):
+                if type_of(child) in (T_POINT, T_CONDUIT, T_CIRCUIT) + OUTPUT_TYPES:
                     child.touch()
 
 
@@ -166,18 +219,26 @@ class ElectricalPoint(_Proxy):
         obj.addProperty("App::PropertyString", "CircuitName", c, "Circuito no último cálculo")
         _readonly(obj, "PowerVA", "PowerW")
         obj.setEditorMode("CircuitName", 2)
+        _ensure(obj, self.SPECS, record=False)
+
+    SPECS = [("App::PropertyEnumeration", "DemandGroup", "Ponto elétrico",
+              "Grupo para o cálculo da demanda (Automático: pelo tipo e pelo nome)",
+              [calc.AUTO_GROUP] + calc.DEMAND_GROUPS, 0)]
+
+    def onDocumentRestored(self, obj):
+        _ensure(obj, self.SPECS)
 
     def onChanged(self, obj, prop):
         if prop == "Placement" and not getattr(self, "_building", False):
             _absorb_placement(obj)
-        elif prop in ("Power", "PowerUnit", "Quantity", "PowerFactor", "Circuit"):
-            for name in (getattr(obj, "CircuitName", ""),):
-                old = obj.Document.getObject(name) if name else None
-                if old is not None:
-                    old.touch()
-            circuit = getattr(obj, "Circuit", None)
-            if circuit is not None:
-                circuit.touch()
+        elif prop in ("Power", "PowerUnit", "Quantity", "PowerFactor", "Circuit", "Position", "Letter", "Symbol",
+                      "Height", "Room", "DemandGroup", "Label") and not _restoring(obj):
+            # its circuit (old and new), feeders, routing of the conduits and the outputs
+            name = getattr(obj, "CircuitName", "")
+            old = obj.Document.getObject(name) if name else None
+            if old is not None:
+                old.touch()
+            network_changed(obj.Document)
 
     def execute(self, obj):
         sym = SYMBOLS[obj.Symbol]
@@ -239,7 +300,7 @@ def _resolve_circuit(doc, circuit, symbol):
 
 
 def make_point(doc, symbol, position, rotation=0.0, circuit=None, power=None, unit=None, quantity=1,
-               letter="", height=None, room="", power_factor=None, label=None):
+               letter="", height=None, room="", power_factor=None, label=None, demand_group=None):
     if symbol not in SYMBOLS:
         raise ValueError(f"Unknown symbol {symbol!r}; use one of {sorted(SYMBOLS)}")
     sym = SYMBOLS[symbol]
@@ -257,6 +318,8 @@ def make_point(doc, symbol, position, rotation=0.0, circuit=None, power=None, un
     obj.Room = room or ""
     obj.Circuit = _resolve_circuit(doc, circuit, symbol)
     obj.Label = label or sym.label
+    if demand_group:
+        obj.DemandGroup = demand_group
     _add(doc, obj)
     _vp(obj, "ViewProviderPoint")
     return obj
@@ -267,7 +330,7 @@ def set_point(obj, **changes):
     height, room, power_factor, label."""
     names = {"symbol": "Symbol", "position": "Position", "rotation": "Rotation", "power": "Power",
              "unit": "PowerUnit", "quantity": "Quantity", "letter": "Letter", "height": "Height",
-             "room": "Room", "power_factor": "PowerFactor", "label": "Label"}
+             "room": "Room", "power_factor": "PowerFactor", "label": "Label", "demand_group": "DemandGroup"}
     for key, value in changes.items():
         if value is None:
             continue
@@ -311,28 +374,82 @@ class Circuit(_Proxy):
             obj.setEditorMode(prop, 1)
         obj.addProperty("App::PropertyStringList", "Warnings", c, "Avisos")
         obj.setEditorMode("Warnings", 1)
+        _ensure(obj, self.SPECS, record=False)
+
+    SPECS = [("App::PropertyFloat", "Length", "Circuito",
+              "Comprimento até o ponto mais distante (m; 0 = pelos eletrodutos)", 0.0, 0),
+             ("App::PropertyString", "Feeds", "Circuito",
+              "Alimentador: nome do quadro que este circuito alimenta (ex.: QD2)", "", 0),
+             ("App::PropertyEnumeration", "RCD", "Circuito",
+              "Proteção por DR 30 mA (Automático: quando a NBR 5410 exige)", RCD_MODES, 0),
+             ("App::PropertyFloat", "LengthUsed", "Cálculo", "Comprimento usado no cálculo (m)", None, 1),
+             ("App::PropertyFloat", "VoltageDrop", "Cálculo", "Queda de tensão (%)", None, 1),
+             ("App::PropertyInteger", "Grouping", "Cálculo",
+              "Circuitos no eletroduto mais cheio por onde passa", 1, 1),
+             ("App::PropertyFloat", "CorrectionFactor", "Cálculo",
+              "Fator de correção da capacidade (agrupamento x temperatura)", 1.0, 1),
+             ("App::PropertyString", "SectionReason", "Cálculo", "O que definiu a seção sugerida", "", 1),
+             ("App::PropertyBool", "HasRCD", "Cálculo", "Protegido por DR", False, 1),
+             ("App::PropertyString", "RCDReason", "Cálculo", "Por que a norma exige DR", "", 1),
+             ("App::PropertyFloat", "DemandVA", "Cálculo", "Demanda do quadro alimentado (VA)", None, 1)]
+
+    def onDocumentRestored(self, obj):
+        _ensure(obj, self.SPECS)
 
     def onChanged(self, obj, prop):
         if prop == "Number" and obj.Document is not None:
             obj.Label = f"Circuito {obj.Number}" + (f" - {obj.Description}" if getattr(obj, "Description", "") else "")
         elif prop == "Description":
             obj.Label = f"Circuito {obj.Number}" + (f" - {obj.Description}" if obj.Description else "")
+        if prop in ("Panel", "Feeds", "Connection", "Number") and not _restoring(obj):
+            network_changed(obj.Document)  # routing, feeders and outputs
 
     def execute(self, obj):
+        from . import network
+
+        doc = obj.Document
+        system = system_of(doc)
+        inst = installation(doc, create=False)
         members = circuit_points(obj)
-        va = sum(calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)[0] for p in members)
-        w = sum(calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)[1] for p in members)
-        system = system_of(obj.Document)
-        amps = calc.current(va, obj.Connection, system)
+        if obj.Feeds:  # a feeder carries the load of the panel it feeds, sized by its demand
+            fed = panel_points(doc, obj.Feeds)
+            va = sum(calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)[0] for p in fed)
+            w = sum(calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)[1] for p in fed)
+            dem = demand_summary(doc, obj.Feeds)
+            obj.DemandVA = round(dem["demand_kva"] * 1000, 1)
+            amps = calc.current(obj.DemandVA, obj.Connection, system)
+            loads = raw_phase_loads(doc, obj.Feeds)
+            scale = obj.DemandVA / va if va else 0.0
+            loads = {p: v * scale for p, v in loads.items()} if obj.Connection != calc.MONO else \
+                calc.phase_loads(obj.DemandVA, obj.Connection, obj.Phases)
+        else:
+            va = sum(calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)[0] for p in members)
+            w = sum(calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)[1] for p in members)
+            obj.DemandVA = 0.0
+            amps = calc.current(va, obj.Connection, system)
+            loads = calc.phase_loads(va, obj.Connection, obj.Phases)
+        net = network.network(doc)
+        info = net.circuit_info.get(obj.Name, {})
+        length = obj.Length or info.get("length_m", 0.0)
+        grouping = self._grouping(obj, net, info, system)
+        temperature = getattr(inst, "AmbientTemperature", 30.0) if inst is not None else 30.0
+        max_drop = getattr(inst, "MaxVoltageDrop", calc.MAX_VOLTAGE_DROP) if inst is not None else calc.MAX_VOLTAGE_DROP
+        factor = calc.grouping_factor(grouping) * calc.temperature_factor(temperature)
         breaker = calc.suggest_breaker(amps, obj.Kind)
         chosen_breaker = obj.Breaker or breaker
-        section = calc.suggest_section(chosen_breaker, obj.Kind, obj.Connection)
+        section, reason = calc.size_conductor(chosen_breaker, obj.Kind, obj.Connection, amps, length, system,
+                                              factor, max_drop)
         chosen_section = obj.Section or section
-        loads = calc.phase_loads(va, obj.Connection, obj.Phases)
+        drop = calc.voltage_drop(amps, length, chosen_section, obj.Connection, system)
+        rcd_reason = self._rcd_reason(doc, members)
+        has_rcd = obj.RCD == "Sim" or (obj.RCD == "Automático" and bool(rcd_reason))
         obj.Points = len(members)
         obj.PowerVA, obj.PowerW, obj.Current = round(va, 1), round(w, 1), round(amps, 2)
         obj.BreakerSuggested, obj.SectionSuggested = breaker, section
         obj.LoadR, obj.LoadS, obj.LoadT = (round(loads[p], 1) for p in calc.PHASES)
+        obj.LengthUsed, obj.VoltageDrop = round(length, 2), round(drop, 2)
+        obj.Grouping, obj.CorrectionFactor, obj.SectionReason = int(grouping), round(factor, 3), reason
+        obj.HasRCD, obj.RCDReason = has_rcd, rcd_reason
         warnings = []
         if len([p for p in obj.Phases if p in calc.PHASES]) != calc.phase_count(obj.Connection):
             warnings.append(f"Ligação {obj.Connection} pede {calc.phase_count(obj.Connection)} fase(s); "
@@ -342,23 +459,188 @@ class Circuit(_Proxy):
         if obj.Section and obj.Section < calc.MIN_SECTION.get(obj.Kind, 2.5):
             warnings.append(f"Seção de {obj.Section:g} mm² abaixo do mínimo de "
                             f"{calc.MIN_SECTION[obj.Kind]:g} mm² para {obj.Kind}")
-        if obj.Section and calc.capacity(obj.Section, obj.Connection) < chosen_breaker:
-            warnings.append(f"Seção de {obj.Section:g} mm² não suporta o disjuntor de {chosen_breaker} A")
+        if obj.Section and calc.capacity(obj.Section, obj.Connection) * factor < chosen_breaker:
+            corrected = f" (com fator {factor:.2f}: {grouping} circuito(s) juntos, {temperature:g} °C)" \
+                if factor < 1 else ""
+            warnings.append(f"Seção de {obj.Section:g} mm² não suporta o disjuntor de {chosen_breaker} A{corrected}")
+        if drop > max_drop:
+            warnings.append(f"Queda de tensão de {drop:.1f} % em {length:.1f} m (máximo {max_drop:g} %)")
+        if rcd_reason and obj.RCD == "Não":
+            warnings.append(f"A NBR 5410 exige DR 30 mA neste circuito ({rcd_reason})")
         if obj.Kind == "Iluminação" and members and any(SYMBOLS[p.Symbol].kind == "TUG" for p in members):
             warnings.append("Circuito de iluminação com tomadas")
-        if not members:
+        if obj.Feeds and obj.Feeds == obj.Panel:
+            warnings.append("O alimentador sai do mesmo quadro que alimenta")
+        elif obj.Feeds and not panel_circuits(doc, obj.Feeds):
+            warnings.append(f"Nenhum circuito no quadro {obj.Feeds}")
+        elif not members and not obj.Feeds:
             warnings.append("Circuito sem itens")
         obj.Warnings = warnings
+
+    @staticmethod
+    def _grouping(obj, net, info, system):
+        """Circuits sharing the most crowded conduit run of this one, itself included, leaving out
+        those that carry up to 30 % of their grouped capacity (NBR 5410 6.2.5.5.6). Their current
+        comes from the item data, so the order of recompute does not matter."""
+        doc = obj.Document
+        grouping = 1
+        for e in info.get("edges", ()):
+            names = [n for n in net.contents.get(e, {}) if n != obj.Name]
+            factor = calc.grouping_factor(len(names) + 1)
+            count = 1
+            for name in names:
+                other = doc.getObject(name)
+                if other is None:
+                    continue
+                if not calc.negligible_in_group(raw_current(other, system), calc.MIN_SECTION.get(other.Kind, 2.5),
+                                                other.Connection, factor):
+                    count += 1
+            grouping = max(grouping, count)
+        return grouping
+
+    @staticmethod
+    def _rcd_reason(doc, members):
+        """Why NBR 5410 requires a 30 mA RCD on a circuit with these items ("" if it does not)."""
+        if not members:
+            return ""
+        from . import checks
+
+        room_list = checks.rooms(doc)
+        for p in members:
+            sym = SYMBOLS[p.Symbol]
+            room = checks.room_of(p, room_list)
+            category = room["category"] if room else calc.room_category(p.Room)
+            reason = calc.rcd_reason(category, sym.kind, float(p.Height.Value), not sym.wall and sym.height == 0)
+            if reason:
+                return f"{reason}: {room['name'] if room else p.Room}"
+        return ""
 
 
 def circuit_points(circuit):
     return [o for o in circuit.InList if type_of(o) == T_POINT and o.Circuit == circuit]
 
 
+def raw_current(circuit, system=None):
+    """Design current of a circuit from its items' data (a feeder: from the panel it feeds)."""
+    doc = circuit.Document
+    system = system or system_of(doc)
+    if getattr(circuit, "Feeds", ""):
+        va = demand_summary(doc, circuit.Feeds)["demand_kva"] * 1000
+    else:
+        va = sum(calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)[0] for p in circuit_points(circuit))
+    return calc.current(va, circuit.Connection, system)
+
+
+def panels(doc):
+    """Panel names in use, in order of first appearance."""
+    names = []
+    for c in circuits(doc):
+        for name in (c.Panel, getattr(c, "Feeds", "")):
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def panel_circuits(doc, panel):
+    return [c for c in circuits(doc) if c.Panel == panel]
+
+
+def fed_panels(doc, panel, seen=None):
+    """`panel` and every panel fed from it, directly or through other panels."""
+    seen = seen if seen is not None else []
+    if panel in seen:
+        return seen
+    seen.append(panel)
+    for c in panel_circuits(doc, panel):
+        if getattr(c, "Feeds", ""):
+            fed_panels(doc, c.Feeds, seen)
+    return seen
+
+
+def top_panels(doc):
+    """Panels no feeder comes to: each one is a service entrance (a consumer unit)."""
+    fed = {getattr(c, "Feeds", "") for c in circuits(doc)}
+    return [p for p in panels(doc) if p not in fed]
+
+
+def panel_points(doc, panel):
+    """Items supplied by `panel`, including those of the panels it feeds."""
+    names = fed_panels(doc, panel)
+    return [p for p in points(doc) if p.Circuit is not None and type_of(p.Circuit) == T_CIRCUIT
+            and p.Circuit.Panel in names and not getattr(p.Circuit, "Feeds", "")]
+
+
+def raw_phase_loads(doc, panel):
+    """VA per phase of the items supplied by `panel`, from the item data (feeders excluded)."""
+    totals = {p: 0.0 for p in calc.PHASES}
+    for name in fed_panels(doc, panel):
+        for c in panel_circuits(doc, name):
+            if getattr(c, "Feeds", ""):
+                continue
+            va = sum(calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)[0] for p in circuit_points(c))
+            for ph, v in calc.phase_loads(va, c.Connection, c.Phases).items():
+                totals[ph] += v
+    return totals
+
+
+def _cv(p):
+    if p.PowerUnit == "CV":
+        return p.Power
+    w = calc.item_power(p.Power, p.PowerUnit, 1, p.PowerFactor)[1]
+    return w * calc.MOTOR_EFFICIENCY / calc.CV_W
+
+
+def demand_items(doc, panel=None):
+    """[(point, group)] of the loads supplied by `panel` (all loads when None)."""
+    pts = panel_points(doc, panel) if panel else [p for p in points(doc) if p.Circuit is not None]
+    out = []
+    for p in pts:
+        if not SYMBOLS[p.Symbol].kind:
+            continue
+        group = getattr(p, "DemandGroup", calc.AUTO_GROUP)
+        if group == calc.AUTO_GROUP:
+            group = calc.demand_group(p.Circuit.Kind, p.Label, p.Circuit.Description)
+        out.append((p, group))
+    return out
+
+
+def demand_summary(doc, panel=None):
+    """Installed load, demand and service entrance category of `panel` (or the whole
+    installation), by the Neoenergia DIS-NOR-030 method. Computed from the item data."""
+    rows, motors, phases_needed, installed_w = [], [], 1, 0.0
+    for p, group in demand_items(doc, panel):
+        va, w = calc.item_power(p.Power, p.PowerUnit, p.Quantity, p.PowerFactor)
+        installed_w += w
+        rows.append((group, max(int(p.Quantity or 1), 1), w / 1000.0, va / 1000.0))
+        n = calc.phase_count(p.Circuit.Connection)
+        phases_needed = max(phases_needed, n)
+        if group == calc.G_MOTOR:
+            motors += [(_cv(p), n)] * max(int(p.Quantity or 1), 1)
+    result = calc.demand(rows)
+    system = system_of(doc)
+    category = calc.service_category(system, installed_w / 1000.0, result["kva"], phases_needed, motors)
+    phases = category["phases"]
+    connection = {1: calc.MONO, 2: calc.BI, 3: calc.TRI_N}[phases]
+    amps = calc.current(result["kva"] * 1000, connection, system)
+    return {"panel": panel or "", "system": system, "installed_kw": round(installed_w / 1000.0, 2),
+            "demand_kva": result["kva"], "groups": result["groups"], "category": category["category"],
+            "category_basis": category["basis"], "phases": phases, "connection": connection,
+            "demand_current_a": round(amps, 1), "main_breaker_a": category["breaker_a"],
+            "phases_needed": phases_needed,
+            "note": "Demanda e categoria pela norma Neoenergia DIS-NOR-030 rev. 04 (Cosern e demais "
+                    "distribuidoras Neoenergia). Outras distribuidoras têm limites próprios. Edifícios com "
+                    "várias unidades: cada quadro sem alimentador é uma unidade; a entrada coletiva segue "
+                    "a norma de edificações coletivas."}
+
+
 def phase_totals(doc, panel=None):
+    """VA per phase of the circuits of `panel`, or of the whole installation (feeders excluded,
+    their loads are already in the circuits they supply)."""
     totals = {p: 0.0 for p in calc.PHASES}
     for c in circuits(doc):
         if panel and c.Panel != panel:
+            continue
+        if not panel and getattr(c, "Feeds", ""):
             continue
         for p, attr in zip(calc.PHASES, ("LoadR", "LoadS", "LoadT")):
             totals[p] += getattr(c, attr)
@@ -366,7 +648,7 @@ def phase_totals(doc, panel=None):
 
 
 def make_circuit(doc, number=None, description="", kind="TUG", connection=calc.MONO, phases=None,
-                 panel="QD1", breaker=0, section=0):
+                 panel="QD1", breaker=0, section=0, feeds="", length=0, rcd="Automático"):
     if kind not in calc.KINDS:
         raise ValueError(f"kind must be one of {calc.KINDS}")
     if connection not in calc.CONNECTIONS:
@@ -384,6 +666,9 @@ def make_circuit(doc, number=None, description="", kind="TUG", connection=calc.M
     obj.Panel = panel or "QD1"
     obj.Breaker = int(breaker or 0)
     obj.Section = float(section or 0)
+    obj.Feeds = feeds or ""
+    obj.Length = float(length or 0)
+    obj.RCD = rcd or "Automático"
     if not phases:
         others = [c for c in circuits(doc) if c is not obj and c.Panel == obj.Panel]
         counts = {p: sum(1 for c in others if p in c.Phases) for p in calc.PHASES}
@@ -398,7 +683,8 @@ def make_circuit(doc, number=None, description="", kind="TUG", connection=calc.M
 
 def set_circuit(obj, **changes):
     names = {"number": "Number", "description": "Description", "kind": "Kind", "connection": "Connection",
-             "phases": "Phases", "panel": "Panel", "breaker": "Breaker", "section": "Section"}
+             "phases": "Phases", "panel": "Panel", "breaker": "Breaker", "section": "Section", "feeds": "Feeds",
+             "length": "Length", "rcd": "RCD"}
     for key, value in changes.items():
         if value is None:
             continue
@@ -459,10 +745,40 @@ class Conduit(_Proxy):
         obj.addProperty("App::PropertyString", "Diameter", g, "Diâmetro (ex.: 25)")
         obj.addProperty("App::PropertyFloat", "MarksAt", g, "Posição das marcas (0 a 1 do comprimento)").MarksAt = 0.5
         obj.addProperty("App::PropertyFloat", "Scale", g, "Escala própria (0 = a da instalação)")
+        _ensure(obj, self.SPECS, record=False)
+
+    SPECS = [("App::PropertyBool", "Automatic", "Eletroduto",
+              "Circuitos e condutores deduzidos dos pontos ligados pelos eletrodutos", False, 0),
+             ("App::PropertyLink", "Network", "Eletroduto",
+              "Quadro de cargas (para calcular depois dos circuitos)", None, 2),
+             ("App::PropertyString", "DiameterSuggested", "Cálculo",
+              "Diâmetro sugerido (ocupação de até 40 %)", "", 1)]
+
+    def onDocumentRestored(self, obj):
+        _ensure(obj, self.SPECS)
 
     def onChanged(self, obj, prop):
         if prop == "Placement" and not getattr(self, "_building", False):
             _absorb_placement(obj)
+        elif prop in ("Points", "Installation", "Automatic") and not _restoring(obj):
+            network_changed(obj.Document)
+
+    def groups(self, obj):
+        """[(circuit, marks)] in the conduit: from the routing when automatic (at the marks
+        position), else from its Circuits list. Plus the extra conductors (circuit None)."""
+        out = []
+        if obj.Automatic:
+            from . import network
+
+            net = network.network(obj.Document)
+            edge = net.edge_at(obj, obj.MarksAt)
+            if edge is not None:
+                out = net.conductors(edge)
+        if not out:
+            out = [(c, conductors_of(c)) for c in obj.Circuits if c is not None and type_of(c) == T_CIRCUIT]
+        if obj.ExtraConductors:
+            out.append((None, [c for c in obj.ExtraConductors if c in CONDUCTORS]))
+        return out
 
     def execute(self, obj):
         import Part
@@ -479,10 +795,14 @@ class Conduit(_Proxy):
                 shapes.append(Part.LineSegment(a, b).toShape())
         at, direction = _point_along(pts, obj.MarksAt)
         frame = geometry.Frame(at, geometry.angle_of(direction), scale)
-        groups = [(str(c.Number), conductors_of(c), c.Section or c.SectionSuggested)
-                  for c in obj.Circuits if c is not None and type_of(c) == T_CIRCUIT]
-        if obj.ExtraConductors:
-            groups.append(("", [c for c in obj.ExtraConductors if c in CONDUCTORS], None))
+        content = self.groups(obj)
+        sections = []
+        for c, marks in content:
+            section = (c.Section or c.SectionSuggested) if c is not None else 1.5
+            sections += [section] * len(marks)
+        obj.DiameterSuggested = str(calc.suggest_conduit(sections)) if sections else ""
+        groups = [(str(c.Number) if c is not None else "", marks,
+                   (c.Section or c.SectionSuggested) if c is not None else None) for c, marks in content]
         prims = []
         pitch, gap = 1.3, 2.2
         widths = [len(marks) * pitch for _, marks, _ in groups]
@@ -499,8 +819,9 @@ class Conduit(_Proxy):
             if section:
                 prims.append(("text", (middle, -3.4), f"{section:g}".replace(".", ","), "center"))
             x += gap
-        if obj.Diameter:
-            prims.append(("text", (-(sum(widths) + gap * len(groups)) / 2 - 0.5, -3.4), f"ø{obj.Diameter}",
+        diameter = obj.Diameter or (obj.DiameterSuggested if obj.Automatic else "")
+        if diameter:
+            prims.append(("text", (-(sum(widths) + gap * len(groups)) / 2 - 0.5, -3.4), f"ø{diameter}",
                           "right"))
         if prims:
             shapes.append(geometry.build_shape(prims, frame))
@@ -541,7 +862,12 @@ def _point_along(pts, fraction):
     return a + direction * target, direction
 
 
-def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diameter="", marks_at=0.5, label=None):
+def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diameter="", marks_at=0.5, label=None,
+                 automatic=None):
+    """A conduit. Automatic (the default when no circuits or extra conductors are given): its
+    circuits and conductors come from the items it connects."""
+    if automatic is None:
+        automatic = not circuits and not extra
     if installation not in INSTALLATIONS:
         raise ValueError(f"installation must be one of {INSTALLATIONS}")
     if len(points) < 2:
@@ -557,6 +883,8 @@ def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diamet
     obj.ExtraConductors = list(extra or ())
     obj.Diameter = str(diameter or "")
     obj.MarksAt = float(marks_at)
+    obj.Automatic = bool(automatic)
+    obj.Network = schedule(doc)
     numbers = ",".join(str(c.Number) for c in obj.Circuits)
     obj.Label = label or f"Eletroduto ({installation})" + (f" circ. {numbers}" if numbers else "")
     _add(doc, obj)
@@ -567,9 +895,12 @@ def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diamet
 # --- load schedule ------------------------------------------------------------------------------
 
 HEADER = ["Circuito", "Descrição", "Tipo", "Ligação", "Fases", "Itens", "Potência (VA)", "Potência (W)",
-          "Corrente (A)", "Disjuntor (A)", "Seção (mm²)", "R (VA)", "S (VA)", "T (VA)"]
-COLUMNS = "ABCDEFGHIJKLMN"
-WIDTHS = (60, 170, 80, 120, 50, 45, 90, 90, 80, 80, 80, 70, 70, 70)  # spreadsheet column widths
+          "Corrente (A)", "Disjuntor (A)", "DR", "Seção (mm²)", "Comp. (m)", "Queda (%)", "R (VA)", "S (VA)",
+          "T (VA)"]
+COLUMNS = "ABCDEFGHIJKLMNOPQ"
+WIDTHS = (60, 170, 80, 120, 50, 45, 90, 90, 80, 80, 60, 80, 70, 70, 70, 70, 70)  # spreadsheet column widths
+TEXT_COLUMNS = "BCDEK"
+ROW_PX = 16  # spreadsheet row height (px): the default 30 px makes printed tables too tall
 
 
 class LoadSchedule(_Proxy):
@@ -595,50 +926,77 @@ class LoadSchedule(_Proxy):
             links = list(obj.Circuits)
             obj.removeProperty("Circuits")
             self._add_circuits(obj, links)
+        if obj.LastCell and not obj.LastCell.startswith(COLUMNS[-1]):
+            _MIGRATED.setdefault(obj.Document.Name, []).append(obj.Name)  # a table with older columns
 
     def execute(self, obj):
         sheet = obj.Sheet
         if sheet is None:
             return
         doc = obj.Document
-        rows = [c for c in circuits(doc)]
         system = system_of(doc)
+        v_ll, v_ln = calc.voltages(system)
         sheet.clearAll()
         sheet.set("A1", "QUADRO DE CARGAS")
-        sheet.set("A2", f"Sistema {system}")
+        sheet.set("A2", f"'Sistema {system}")
         for col, title in zip(COLUMNS, HEADER):
             sheet.set(f"{col}4", title)
+        last = COLUMNS[-1]
+        bold = ["A1:A1", f"A4:{last}4"]
         r = 5
-        for c in rows:
-            values = [str(c.Number), c.Description or c.Kind, c.Kind, c.Connection, c.Phases, f"{c.Points:g}",
-                      f"{c.PowerVA:.0f}", f"{c.PowerW:.0f}", f"{c.Current:.1f}",
-                      f"{c.Breaker or c.BreakerSuggested:g}", f"{c.Section or c.SectionSuggested:g}",
-                      f"{c.LoadR:.0f}", f"{c.LoadS:.0f}", f"{c.LoadT:.0f}"]
-            for col, value in zip(COLUMNS, values):
-                sheet.set(f"{col}{r}", value if col not in "BCDE" else f"'{value}")
-            r += 1
+        names = panels(doc) or ["QD1"]
+        several = len(names) > 1
+        for name in names:
+            rows = panel_circuits(doc, name)
+            if not rows:
+                continue
+            if several:
+                sheet.set(f"A{r}", f"'Quadro {name}")
+                bold.append(f"A{r}:A{r}")
+                r += 1
+            for c in rows:
+                feeds = f" (alimenta {c.Feeds})" if getattr(c, "Feeds", "") else ""
+                values = [str(c.Number), (c.Description or c.Kind) + feeds, c.Kind, c.Connection, c.Phases,
+                          f"{c.Points:g}", f"{c.PowerVA:.0f}", f"{c.PowerW:.0f}", f"{c.Current:.1f}",
+                          f"{c.Breaker or c.BreakerSuggested:g}", "30 mA" if c.HasRCD else "-",
+                          f"{c.Section or c.SectionSuggested:g}", f"{c.LengthUsed:.1f}" if c.LengthUsed else "-",
+                          f"{c.VoltageDrop:.2f}" if c.LengthUsed else "-",
+                          f"{c.LoadR:.0f}", f"{c.LoadS:.0f}", f"{c.LoadT:.0f}"]
+                for col, value in zip(COLUMNS, values):
+                    sheet.set(f"{col}{r}", f"'{value}" if col in TEXT_COLUMNS or value == "-" else value)
+                r += 1
+            totals = phase_totals(doc, name)
+            sheet.set(f"A{r}", f"'TOTAL {name}" if several else "'TOTAL")
+            sheet.set(f"G{r}", f"{sum(c.PowerVA for c in rows):.0f}")
+            sheet.set(f"H{r}", f"{sum(c.PowerW for c in rows):.0f}")
+            for col, p in zip("OPQ", calc.PHASES):
+                sheet.set(f"{col}{r}", f"{totals[p]:.0f}")
+            bold.append(f"A{r}:{last}{r}")
+            r += 2
         totals = phase_totals(doc)
-        total_va = sum(c.PowerVA for c in rows)
-        total_w = sum(c.PowerW for c in rows)
-        sheet.set(f"A{r}", "'TOTAL")
-        sheet.set(f"G{r}", f"{total_va:.0f}")
-        sheet.set(f"H{r}", f"{total_w:.0f}")
-        for col, p in zip("LMN", calc.PHASES):
-            sheet.set(f"{col}{r}", f"{totals[p]:.0f}")
-        v_ll, v_ln = calc.voltages(system)
-        r += 2
         biggest = max(totals.values()) if totals else 0
         sheet.set(f"A{r}", f"'Desequilíbrio entre fases: {calc.imbalance(totals):.1f} %   "
                            f"Corrente da fase mais carregada: {biggest / v_ln:.1f} A")
+        r += 1
+        for name in top_panels(doc):
+            dem = demand_summary(doc, name)
+            category = (f"categoria {dem['category']}, disjuntor geral {dem['main_breaker_a']} A"
+                        if dem["category"] else dem["category_basis"])
+            sheet.set(f"A{r}", f"'Entrada {name}: carga instalada {dem['installed_kw']:.2f} kW, demanda "
+                               f"{dem['demand_kva']:.2f} kVA ({dem['demand_current_a']:.1f} A), {category}")
+            r += 1
+        sheet.set(f"A{r}", "'Demanda e categoria pela norma Neoenergia DIS-NOR-030 (Cosern). Queda de tensão "
+                           "até o ponto mais distante; seções com fatores de agrupamento e temperatura (NBR 5410).")
         try:
-            sheet.setStyle("A1:N1", "bold")
-            sheet.setStyle(f"A4:N4", "bold")
-            sheet.setStyle(f"A{r - 2}:N{r - 2}", "bold")
+            for cells in bold:
+                sheet.setStyle(cells, "bold")
             for col, width in zip(COLUMNS, WIDTHS):
                 sheet.setColumnWidth(col, width)
+            for row in range(1, r + 1):
+                sheet.setRowHeight(str(row), ROW_PX)
         except Exception:
             pass
-        obj.LastCell = f"N{r}"
+        obj.LastCell = f"{last}{r}"
         # The table is written after the sheet's own recompute: recompute it now and clear the
         # touched flag, or the document would report it as still pending.
         sheet.recompute()
@@ -680,26 +1038,48 @@ def describe_circuit(c):
             "power_va": c.PowerVA, "power_w": c.PowerW, "current_a": c.Current,
             "breaker_a": c.Breaker or c.BreakerSuggested, "breaker_suggested_a": c.BreakerSuggested,
             "section_mm2": c.Section or c.SectionSuggested, "section_suggested_mm2": c.SectionSuggested,
-            "load_va": {"R": c.LoadR, "S": c.LoadS, "T": c.LoadT}, "warnings": list(c.Warnings)}
+            "load_va": {"R": c.LoadR, "S": c.LoadS, "T": c.LoadT}, "length_m": c.LengthUsed,
+            "voltage_drop_percent": c.VoltageDrop, "grouping": c.Grouping, "correction_factor": c.CorrectionFactor,
+            "section_reason": c.SectionReason, "rcd": c.HasRCD, "rcd_mode": c.RCD, "rcd_reason": c.RCDReason,
+            "feeds": c.Feeds, "demand_va": c.DemandVA, "warnings": list(c.Warnings)}
 
 
 def load_summary(doc):
     system = system_of(doc)
     v_ll, v_ln = calc.voltages(system)
     cs = circuits(doc)
+    loads = [c for c in cs if not c.Feeds]  # feeders repeat the loads of the panels they supply
     totals = phase_totals(doc)
-    panels = {}
+    by_panel = {}
     for c in cs:
-        panel = panels.setdefault(c.Panel, {"power_va": 0.0, "power_w": 0.0, "circuits": 0})
+        panel = by_panel.setdefault(c.Panel, {"power_va": 0.0, "power_w": 0.0, "circuits": 0})
         panel["power_va"] += c.PowerVA
         panel["power_w"] += c.PowerW
         panel["circuits"] += 1
     return {"system": system, "circuits": [describe_circuit(c) for c in cs],
-            "total_va": round(sum(c.PowerVA for c in cs), 1), "total_w": round(sum(c.PowerW for c in cs), 1),
+            "total_va": round(sum(c.PowerVA for c in loads), 1), "total_w": round(sum(c.PowerW for c in loads), 1),
             "phase_va": {p: round(v, 1) for p, v in totals.items()},
             "phase_current_a": {p: round(v / v_ln, 2) for p, v in totals.items()},
-            "imbalance_percent": round(calc.imbalance(totals), 1), "panels": panels,
+            "imbalance_percent": round(calc.imbalance(totals), 1), "panels": by_panel,
+            "service_entrances": [demand_summary(doc, name) for name in top_panels(doc)],
+            "floors": floors(doc),
             "unassigned_points": [p.Label for p in points(doc) if p.Circuit is None and SYMBOLS[p.Symbol].kind]}
+
+
+def floors(doc):
+    """[(elevation mm, name)] of the floors with electrical items: the distinct elevations of
+    items and conduits, named after the BIM level at that height when there is one."""
+    levels = [(o.Placement.Base.z, o.Label) for o in doc.Objects
+              if type_of(o) == "BuildingPart" and getattr(o, "IfcType", "") in ("Building Storey", "Floor")]
+    zs = []
+    for z in [p.Position.z for p in points(doc)] + [v.z for c in conduits(doc) for v in c.Points]:
+        if not any(abs(z - other) < FLOOR_TOLERANCE for other in zs):
+            zs.append(z)
+    out = []
+    for z in sorted(zs):
+        name = next((label for lz, label in levels if abs(lz - z) < FLOOR_TOLERANCE), None)
+        out.append((round(z, 1), name or f"Pavimento {z / 1000:+.2f} m".replace(".", ",")))
+    return out
 
 
 # --- keeping things up to date when items are deleted ------------------------------------------------
@@ -715,14 +1095,31 @@ class _Observer:
                 for dependent in obj.InList:
                     if type_of(dependent) in (T_POINT, T_CONDUIT, T_SCHEDULE):
                         dependent.touch()
-            else:
+            elif kind != T_CONDUIT:
                 return
+            network_changed(obj.Document)  # routing, feeders and outputs
             sched = schedule(obj.Document, create=False)
             if sched is not None:
                 sched.touch()
             _later(obj.Document)
         except Exception:
             pass
+
+    def slotBeforeRecomputeDocument(self, doc):
+        """A file saved by an older version got new properties: compute them on its first
+        recompute (marks set while restoring are cleared when the restore ends)."""
+        if doc.Name not in _MIGRATED:
+            return
+        names = _MIGRATED.pop(doc.Name, [])
+        for name in names:
+            obj = doc.getObject(name)
+            if obj is not None:
+                obj.touch()
+        if names:
+            network_changed(doc)
+
+
+_MIGRATED = {}  # document name -> objects that got new properties while restoring
 
 
 def _later(doc):

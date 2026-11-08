@@ -11,6 +11,8 @@ SET(Electrical_SRCS
     freecad_electrical/geometry.py
     freecad_electrical/gui.py
     freecad_electrical/model.py
+    freecad_electrical/network.py
+    freecad_electrical/outputs.py
     freecad_electrical/sheets.py
     freecad_electrical/symbols.py
     Resources/icons/ElectricalWorkbench.svg

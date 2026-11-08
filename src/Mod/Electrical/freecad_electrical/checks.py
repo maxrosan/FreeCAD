@@ -31,7 +31,8 @@ def rooms(doc):
         face = _footprint(obj)
         if face is None:
             continue
-        found.append({"object": obj, "name": obj.Label, "face": face,
+        box = obj.Shape.BoundBox
+        found.append({"object": obj, "name": obj.Label, "face": face, "zmin": box.ZMin, "zmax": max(box.ZMax, box.ZMin + 1),
                       "area_m2": face.Area / 1e6, "perimeter_m": face.OuterWire.Length / 1000.0,
                       "category": calc.room_category(obj.Label)})
     return found
@@ -43,7 +44,11 @@ def room_of(point, room_list):
             if room["name"].lower() == point.Room.lower():
                 return room
         return None
+    z = point.Position.z
     for room in room_list:
+        # the room of the same floor: items sit at the floor elevation, within the room's height
+        if not room["zmin"] - model.FLOOR_TOLERANCE <= z < room["zmax"] - 1:
+            continue
         face = room["face"]
         probe = App.Vector(point.Position.x, point.Position.y, face.BoundBox.ZMin)
         if face.isInside(probe, 1.0, True):
@@ -67,6 +72,19 @@ def check(doc):
     loose = [p.Label for p in model.points(doc) if p.Circuit is None and SYMBOLS[p.Symbol].kind]
     if loose:
         report["warnings"].append(f"{len(loose)} item(ns) com carga sem circuito: {', '.join(loose[:10])}")
+    from . import network
+
+    net = network.network(doc)
+    if model.conduits(doc) and net.unrouted:
+        report["warnings"].append(f"{len(net.unrouted)} item(ns) sem eletroduto até o quadro (comprimento estimado "
+                                  f"em ângulo reto): {', '.join(net.unrouted[:10])}")
+    report["service_entrances"] = []
+    for name in model.top_panels(doc):
+        dem = model.demand_summary(doc, name)
+        report["service_entrances"].append(dem)
+        if dem["category"] is None:
+            report["warnings"].append(f"Quadro {name}: {dem['category_basis']}")
+    report["floors"] = model.floors(doc)
 
     room_list = rooms(doc)
     by_room = {id(r): [] for r in room_list}

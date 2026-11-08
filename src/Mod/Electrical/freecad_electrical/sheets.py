@@ -79,7 +79,59 @@ def sources(doc):
                 and App.GuiUp and obj.ViewObject and not obj.ViewObject.Visibility:
             continue
         found.append(obj)
-    return found
+    return _electrical_last(found)
+
+
+def _elevation(obj):
+    shape = getattr(obj, "Shape", None)
+    if shape is not None and not shape.isNull():
+        return shape.BoundBox.ZMin
+    placement = getattr(obj, "Placement", None)
+    return placement.Base.z if placement is not None else None
+
+
+def floor_ranges(doc):
+    """[(name, zmin, zmax)] of the floors with electrical items (one floor: [])."""
+    floors = model.floors(doc)
+    if len(floors) < 2:
+        return []
+    tol = model.FLOOR_TOLERANCE
+    out = []
+    for i, (z, name) in enumerate(floors):
+        top = floors[i + 1][0] - tol if i + 1 < len(floors) else 1e12
+        out.append((name, z - tol, top))
+    return out
+
+
+def floor_sources(doc, zmin, zmax):
+    """What a sheet of one floor draws: the objects starting between zmin and zmax, taken out of
+    their groups, levels and layers (a group may span several floors)."""
+    found, seen = [], set()
+
+    def walk(obj):
+        if obj.Name in seen:
+            return
+        seen.add(obj.Name)
+        members = getattr(obj, "Group", None)
+        if members is not None and (obj.isDerivedFrom("App::DocumentObjectGroup") or _type(obj) in ("Layer", "BuildingPart")):
+            for member in members:
+                walk(member)
+            return
+        if obj.TypeId.startswith("TechDraw::") or obj.TypeId in ("Spreadsheet::Sheet", "App::LinkGroup"):
+            return
+        z = _elevation(obj)
+        if z is not None and zmin <= z < zmax:
+            found.append(obj)
+
+    for obj in sources(doc):
+        walk(obj)
+    return _electrical_last(found)
+
+
+def _electrical_last(objs):
+    """Draw order: the electrical installation goes last, on top of the filled rooms."""
+    electrical = {model.T_INSTALLATION, model.T_POINT, model.T_CONDUIT}
+    return sorted(objs, key=lambda o: _type(o) in electrical)
 
 
 def extent(objs):
@@ -134,21 +186,38 @@ def _page(doc, name, label, sheet):
     return page, template, size
 
 
-def make_content(doc, objs=None, label="Conteúdo da folha"):
-    """Link group drawn by a sheet. Without `objs` it follows the document (AutoSources)."""
+def _content_sources(doc, content):
+    if getattr(content, "FloorMax", 0.0) > getattr(content, "FloorMin", 0.0):
+        return floor_sources(doc, content.FloorMin, content.FloorMax)
+    return sources(doc)
+
+
+def make_content(doc, objs=None, label="Conteúdo da folha", floor=None):
+    """Link group drawn by a sheet. Without `objs` it follows the document (AutoSources), or the
+    objects of one floor when `floor` is (zmin, zmax)."""
     content = doc.addObject("App::LinkGroup", "SheetContent")
     content.Label = label
     content.addProperty("App::PropertyBool", AUTO, "Folha", "Acompanhar os objetos do documento")
     setattr(content, AUTO, objs is None)
-    content.ElementList = sources(doc) if objs is None else list(objs)
+    if floor is not None:
+        content.addProperty("App::PropertyFloat", "FloorMin", "Folha", "Andar: cota inicial (mm)")
+        content.addProperty("App::PropertyFloat", "FloorMax", "Folha", "Andar: cota final (mm)")
+        content.FloorMin, content.FloorMax = floor
+    content.ElementList = _content_sources(doc, content) if objs is None else list(objs)
     if App.GuiUp and content.ViewObject:
         content.ViewObject.Visibility = False
     return content
 
 
-def make_sheet(doc, sheet="auto", scale=None, objs=None, title=None, line_width=0.35, text_height=2.5):
-    """A page with the drawing at 1:scale, kept up to date. Returns (page, view, sheet, scale, box)."""
-    content_objs = objs if objs is not None else sources(doc)
+def make_sheet(doc, sheet="auto", scale=None, objs=None, title=None, line_width=0.35, text_height=2.5, floor=None):
+    """A page with the drawing at 1:scale, kept up to date. `floor` (zmin, zmax) limits it to one
+    floor. Returns (page, view, sheet, scale, box)."""
+    if objs is not None:
+        content_objs = objs
+    elif floor is not None:
+        content_objs = floor_sources(doc, *floor)
+    else:
+        content_objs = sources(doc)
     if not content_objs:
         raise ValueError("Nothing to draw")
     box = extent(content_objs)
@@ -178,7 +247,7 @@ def make_sheet(doc, sheet="auto", scale=None, objs=None, title=None, line_width=
     fill_title_block(template, title or doc.Label, f"1:{scale:g}")
     # One view of a link group holding every source: links leave the objects in their layers
     # and levels, and a single view needs no alignment with others.
-    content = make_content(doc, objs, f"{page.Label} - conteúdo")
+    content = make_content(doc, objs, f"{page.Label} - conteúdo", floor)
     view = doc.addObject("TechDraw::DrawViewDraft", "View")
     view.Source = content
     view.ScaleType = "Custom"
@@ -193,48 +262,75 @@ def make_sheet(doc, sheet="auto", scale=None, objs=None, title=None, line_width=
     return page, view, sheet, scale, box
 
 
-def make_schedule_page(doc, title="Quadro de cargas", sheet="A3"):
-    """A page with the load schedule table, following the table as it grows."""
-    sched = model.schedule(doc)
+def _table_page(doc, owner, name, view_name, title, widths, sheet="A3", text_mm=2.5):
+    """A page with the spreadsheet of `owner` (schedule or materials), following it as it grows."""
     doc.recompute()
-    page, template, size = _page(doc, "SheetQuadroDeCargas", title, sheet)
+    page, template, size = _page(doc, name, f"Folha - {title}", sheet)
     fill_title_block(template, title, "-", "")
-    table = doc.addObject("TechDraw::DrawViewSpreadsheet", "VistaQuadroDeCargas")
-    table.Source = sched.Sheet
+    table = doc.addObject("TechDraw::DrawViewSpreadsheet", view_name)
+    table.Source = owner.Sheet
     table.CellStart = "A1"
-    table.CellEnd = sched.LastCell or "N5"
+    table.CellEnd = owner.LastCell or "D5"
     page.addView(table)
     x0, y0, x1, y1 = drawing_area(size)
     # The view draws column widths and text sizes in pixels at 96 dpi: scale the table to the
-    # free width, and size the text so it prints 2.5 mm high.
+    # free width, and size the text so it prints `text_mm` high.
     px_mm = 25.4 / 96
-    scale = (x1 - x0) / (float(sum(model.WIDTHS)) * px_mm)
+    scale = (x1 - x0) / (float(sum(widths)) * px_mm)
     table.ScaleType = "Custom"
     table.Scale = scale
-    table.TextSize = 2.5 / (px_mm * scale)
-    table.X, table.Y = (x0 + x1) / 2, (y0 + y1) / 2 + 20
+    table.TextSize = text_mm / (px_mm * scale)
+    table.X, table.Y = (x0 + x1) / 2, (y0 + y1) / 2
     doc.recompute()
     return page, table
 
 
+def make_schedule_page(doc, title="Quadro de cargas", sheet="A3"):
+    """A page with the load schedule table, following the table as it grows."""
+    return _table_page(doc, model.schedule(doc), "SheetQuadroDeCargas", "VistaQuadroDeCargas", title, model.WIDTHS,
+                       sheet, 2.2)
+
+
+def make_materials_page(doc, title="Lista de materiais", sheet="A3"):
+    from . import outputs
+
+    owner = outputs.materials(doc)
+    return _table_page(doc, owner, "SheetMateriais", "VistaMateriais", title, outputs.Materials.WIDTHS, sheet, 2.2)
+
+
+def make_diagram_page(doc, title="Diagrama unifilar", sheet="A3"):
+    """A page with the single-line diagram of the panels, redrawn when the circuits change."""
+    from . import outputs
+
+    diagram = outputs.diagram(doc)
+    page, template, size = _page(doc, "SheetUnifilar", f"Folha - {title}", sheet)
+    fill_title_block(template, title, "-", "")
+    view = doc.addObject("TechDraw::DrawViewSymbol", "VistaUnifilar")
+    page.addView(view)
+    diagram.View = view
+    doc.recompute()
+    return page, view
+
+
 def follow_schedule(doc):
-    """Keep the range of schedule views on the whole table."""
-    sched = model.schedule(doc, create=False)
-    if sched is None or not sched.LastCell:
-        return
-    for obj in doc.Objects:
-        if obj.TypeId == "TechDraw::DrawViewSpreadsheet" and obj.Source == sched.Sheet \
-                and obj.CellEnd != sched.LastCell:
-            obj.CellEnd = sched.LastCell
+    """Keep the range of table views (schedule, materials) on the whole table."""
+    owners = [model.schedule(doc, create=False)]
+    owners += model.items(doc, model.T_MATERIALS)
+    for owner in owners:
+        if owner is None or not owner.LastCell:
+            continue
+        for obj in doc.Objects:
+            if obj.TypeId == "TechDraw::DrawViewSpreadsheet" and obj.Source == owner.Sheet \
+                    and obj.CellEnd != owner.LastCell:
+                obj.CellEnd = owner.LastCell
 
 
 def sync(doc):
     """Rebuild the element list of every AutoSources sheet content; True if something changed."""
     changed = False
-    current = None
     for obj in doc.Objects:
         if obj.TypeId == "App::LinkGroup" and getattr(obj, AUTO, False):
-            current = current if current is not None else sources(doc)
+            current = _content_sources(doc, obj)
             if [o.Name for o in obj.ElementList] != [o.Name for o in current]:
                 obj.ElementList = current
                 changed = True
@@ -291,3 +387,27 @@ def install_observer():
     if _observer is None:
         _observer = _Observer()
         App.addDocumentObserver(_observer)
+
+
+def make_electrical_sheets(doc, title=None, sheet="auto", scale=None, schedule=True, diagram=True, materials=True):
+    """Every page of the electrical design, all kept up to date: the plan (one page per floor
+    when items are on several floors), the load schedule, the single-line diagram and the bill of
+    materials. Returns [(kind, page)]."""
+    title = title or doc.Label
+    pages = []
+    ranges = floor_ranges(doc)
+    if ranges:
+        for name, zmin, zmax in ranges:
+            if not floor_sources(doc, zmin, zmax):
+                continue
+            page = make_sheet(doc, sheet, scale, title=f"{title} - planta elétrica - {name}", floor=(zmin, zmax))[0]
+            pages.append(("planta", page))
+    else:
+        pages.append(("planta", make_sheet(doc, sheet, scale, title=f"{title} - planta elétrica")[0]))
+    if schedule:
+        pages.append(("quadro_de_cargas", make_schedule_page(doc)[0]))
+    if diagram:
+        pages.append(("unifilar", make_diagram_page(doc)[0]))
+    if materials:
+        pages.append(("materiais", make_materials_page(doc)[0]))
+    return pages
