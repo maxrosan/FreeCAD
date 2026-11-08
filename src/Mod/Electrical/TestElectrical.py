@@ -676,3 +676,55 @@ class Test3D(unittest.TestCase):
         self.assertAlmostEqual(box.YMax, 75, places=3)  # flush with the wall face
         self.assertGreater(box.XLength, box.YLength)  # along the wall
         self.assertEqual(model.SYMBOLS[switch.Symbol].beside > 0, True)
+
+
+class TestWalk(unittest.TestCase):
+    def setUp(self):
+        self.doc = App.newDocument("TestePasseio")
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def test_floors_start_walls_and_camera(self):
+        import Arch
+        import Draft
+        from freecad_electrical import walk
+
+        V = App.Vector
+        _house(self.doc)
+        _house(self.doc, z=3000, first=11, panel="QD2")
+        self.assertEqual([z for z, _ in walk.floors(self.doc)], [0.0, 3000.0])
+        base = Draft.make_wire([V(-1000, -1000, 0), V(5000, -1000, 0)])
+        Arch.makeWall(base, width=150, height=2800, align="Center")
+        self.doc.recompute()
+        walls = walk.wall_segments(self.doc, walk.EYE)
+        self.assertTrue(walls)
+        self.assertFalse(walk.wall_segments(self.doc, 3000 + walk.EYE))  # the wall is on the ground floor only
+        # walking into the wall is stopped, walking along it or away from it is not
+        self.assertTrue(walk.blocked(walls, (1000, -500), (1000, -1200)))
+        self.assertFalse(walk.blocked(walls, (1000, -500), (1500, -500)))
+        self.assertFalse(walk.blocked(walls, (1000, -850), (1000, -500)))
+        # the camera looks where the person faces, with Z up
+        r = walk.camera_rotation(90, 0)
+        forward = r.multVec(V(0, 0, -1))
+        self.assertAlmostEqual(forward.y, 1.0, places=6)
+        self.assertAlmostEqual(r.multVec(V(0, 1, 0)).z, 1.0, places=6)
+        down = walk.camera_rotation(0, -30).multVec(V(0, 0, -1))
+        self.assertLess(down.z, -0.4)
+
+
+    def test_3d_of_one_floor(self):
+        from freecad_electrical import model3d
+
+        _house(self.doc)
+        _house(self.doc, z=3000, first=11, panel="QD2")
+        obj = model3d.model3d(self.doc)
+        self.doc.recompute()
+        everything = obj.Shape.BoundBox
+        obj.VisibleFloor = "3000"
+        self.doc.recompute()
+        self.assertGreaterEqual(obj.Shape.BoundBox.ZMin, 3000 - 100)
+        self.assertLess(everything.ZMin, 1000)  # the ground floor was there before
+        obj.VisibleFloor = ""
+        self.doc.recompute()
+        self.assertAlmostEqual(obj.Shape.BoundBox.ZMin, everything.ZMin, places=3)

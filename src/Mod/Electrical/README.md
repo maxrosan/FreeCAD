@@ -45,6 +45,11 @@ Building electrical plans in FreeCAD, Brazilian conventions:
   entrada") is a pole with the meter box; a buried conduit ("enterrado") takes the entrance
   cables, sized for the main breaker of its category, to the panel. An isometric page in the
   circuit colours goes with the other sheets (drawn as SVG, so it updates in under a second).
+* **Walk through the model** ("Passeio"): the view of a person at eye height (1,6 m), moved with
+  the keyboard (W/S or arrows walk, A/D sideways, Left/Right turn, R/F look up/down, Shift
+  faster, Esc ends), stopped by the walls; PageUp/PageDown or the buttons of its window go to the
+  floor above/below. While walking, the floors above, the BIM rooms and the plan symbols are
+  hidden and the 3D shows only that floor; all comes back at the end.
 * **Legible plans.** Texts are filled glyphs without an outline (an outline makes small text look
   bold), in the 3D view and on sheets. The power and circuit of each item, and the conductor
   marks of each conduit, go where they overlap the least: around the symbol, along the conduit or

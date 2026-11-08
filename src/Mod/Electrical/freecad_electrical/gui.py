@@ -48,6 +48,9 @@ EXTRA_ICONS = {
                'width="10" height="32" fill="#1565c0"/><rect x="42" y="10" width="10" height="44" fill="#c62828"/></svg>',
     "instalacao": '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><path d="M36 4L14 36h16l-4 24 24-34H34z" '
                   'fill="#f9a825" stroke="black" stroke-width="2"/></svg>',
+    "passeio": '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="34" cy="10" r="6" '
+               'fill="black"/><path d="M33 18l-5 18 8 8-2 16M28 36l-10 22M31 22l-10 8 2 8M33 22l10 10 8-2" '
+               'fill="none" stroke="black" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     "instalacao3d": '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><path d="M8 20l24-12 24 12v26L32 58 '
                     '8 46z" fill="#eceff1" stroke="black" stroke-width="2"/><path d="M8 20l24 12 24-12M32 32v26" '
                     'fill="none" stroke="black" stroke-width="2"/><path d="M14 40c6-10 14-14 18-14s10 6 18-4" '
@@ -994,6 +997,27 @@ class Model3DCommand(_Command):
         CircuitsView.open(doc)
 
 
+class WalkCommand(_Command):
+    icon_name, text, tip = ("passeio", "Passeio",
+                            "Andar dentro do modelo, na altura dos olhos: W/S andar, A/D de lado, ←/→ virar, "
+                            "PageUp/PageDown troca de andar, Esc sai")
+
+    def Activated(self):
+        from . import walk
+
+        doc = App.ActiveDocument
+        view = Gui.ActiveDocument.ActiveView
+        if not hasattr(view, "getCameraNode"):  # a sheet is in front: go to the 3D view
+            from PySide import QtWidgets
+
+            mdi = Gui.getMainWindow().findChild(QtWidgets.QMdiArea)
+            for w in mdi.subWindowList():
+                if w.windowTitle().startswith(f"{doc.Label} : "):
+                    mdi.setActiveSubWindow(w)
+                    break
+        walk.Walk.start(doc)
+
+
 class MaterialsCommand(_Command):
     icon_name, text, tip = "materiais", "Lista de materiais", "Cabos, eletrodutos, caixas, dispositivos e proteção"
 
@@ -1081,6 +1105,7 @@ class InstallationCommand(_Command):
 TOOLS = {"Eletrica_Circuito": CircuitCommand, "Eletrica_Eletroduto": ConduitCommand,
          "Eletrica_QuadroCargas": ScheduleCommand, "Eletrica_Unifilar": DiagramCommand,
          "Eletrica_Materiais": MaterialsCommand, "Eletrica_Demanda": DemandCommand, "Eletrica_3D": Model3DCommand,
+         "Eletrica_Passeio": WalkCommand,
          "Eletrica_Folhas": SheetCommand,
          "Eletrica_Conferir": CheckCommand, "Eletrica_EquilibrarFases": BalanceCommand,
          "Eletrica_Instalacao": InstallationCommand}

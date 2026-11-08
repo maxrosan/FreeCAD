@@ -81,12 +81,13 @@ def _diameter(text, default=20.0):
 class _Model:
     """Collects the solids and their colours."""
 
-    def __init__(self, doc, only=None):
+    def __init__(self, doc, only=None, floor=None):
         import Part
 
         self.Part = Part
         self.doc = doc
         self.only = {int(n) for n in only} if only else None  # circuit numbers shown (None: all)
+        self.floor = floor  # elevation of the only floor shown (None: all)
         self.net = network.network(doc)
         self.ceiling = self.net.ceiling
         self.solids = []      # (solid, colour)
@@ -94,6 +95,9 @@ class _Model:
         self._walls = None    # vertical faces of the BIM walls
         self.flat = []        # for the isometric page: ("line", [points], diameter, colour),
         #                       ("poly", [points], colour), ("circle", centre, radius, colour)
+
+    def on_floor(self, z):
+        return self.floor is None or abs(float(z) - self.floor) < model.FLOOR_TOLERANCE
 
     def shown(self, circuit):
         return self.only is None or (circuit is not None and circuit.Number in self.only)
@@ -153,6 +157,9 @@ class _Model:
             kind = ed["installation"]
             if kind == "caixa":
                 continue  # floor and ceiling runs joined at an item: its drops do it
+            if not (self.on_floor(self.net.nodes[ed["u"]][2]) or
+                    (kind == "prumada" and self.on_floor(self.net.nodes[ed["v"]][2]))):
+                continue
             style = self.edge_style(e)
             if style is None:
                 continue
@@ -176,7 +183,7 @@ class _Model:
             sections.setdefault(p.Name, []).extend([_section(c)] * len(marks))
             own.setdefault(p.Name, c)
         for p in model.points(self.doc):
-            if not self.item_shown(p):
+            if not self.item_shown(p) or not self.on_floor(p.Position.z):
                 continue
             box = self.item(p)
             node = self.net.attached.get(p.Name)
@@ -567,6 +574,9 @@ class Installation3D(model._Proxy):
         if "VisibleCircuits" not in obj.PropertiesList:
             obj.addProperty("App::PropertyIntegerList", "VisibleCircuits", "Instalação 3D",
                             "Circuitos mostrados (vazio: todos)")
+        if "VisibleFloor" not in obj.PropertiesList:
+            obj.addProperty("App::PropertyString", "VisibleFloor", "Instalação 3D",
+                            "Cota (mm) do único andar mostrado, no passeio (vazio: todos)")
 
     def onDocumentRestored(self, obj):
         self._visible(obj)
@@ -578,14 +588,19 @@ class Installation3D(model._Proxy):
 
     def execute(self, obj):
         only = list(getattr(obj, "VisibleCircuits", []) or [])
-        built = _Model(obj.Document, only)
+        floor = getattr(obj, "VisibleFloor", "")
+        try:
+            floor = float(floor) if floor else None
+        except ValueError:
+            floor = None
+        built = _Model(obj.Document, only, floor)
         built.build()
         shape, colors = build(obj.Document, built)
         obj.Shape = shape
         obj.FaceColors = [tuple(c) + (0.0,) if len(c) == 3 else c for c in colors]
         view = getattr(obj, "View", None)
-        if view is None:
-            return
+        if view is None or floor is not None:
+            return  # the isometric page shows every floor: leave it while walking on one
         from . import outputs, sheets
 
         page = next((o for o in view.InList if o.TypeId == "TechDraw::DrawPage"), None)
