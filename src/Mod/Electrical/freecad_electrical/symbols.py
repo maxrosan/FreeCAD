@@ -94,11 +94,10 @@ def _switch(kind, sections):
                 for a in (90, 210, 330):
                     prims.append(("line", (0, 0), (R_SW * math.cos(math.radians(a)),
                                                    R_SW * math.sin(math.radians(a)))))
-        places = [((1.4, 1.4), "left"), ((-1.4, 1.4), "right"), ((0, -3.6), "center")]
-        if len(letters) >= 2:
-            places = [((-1.4, 1.4), "right"), ((1.4, 1.4), "left"), ((0, -3.6), "center")]
-        for letter, (pos, align) in zip(letters, places):
-            prims.append(("text", pos, letter, align))
+        # The letters go beside the circle, upright, wherever they overlap the least: written at
+        # fixed spots they turned with the symbol and could land on the circle.
+        if letters:
+            prims.append(("block", (0, 0), [" ".join(letters)], "round", R_SW))
         return prims
 
     return build

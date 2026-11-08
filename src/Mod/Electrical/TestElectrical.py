@@ -521,3 +521,11 @@ class TestLayout(unittest.TestCase):
         t, _ = layout.marks_of(conduit)
         self.assertNotAlmostEqual(t, 0.5)
 
+    def test_switch_letter_stays_off_its_circle(self):
+        for rotation in (0, 90, 180, 270):
+            p = model.make_point(self.doc, "interruptor_simples", App.Vector(rotation * 20, 0, 0), rotation, letter="a")
+            self.doc.recompute()
+            circle = p.Shape.BoundBox
+            self.assertFalse(p.Labels.isNull())
+            self.assertFalse(_boxes_overlap(circle, p.Labels.BoundBox), rotation)
+
