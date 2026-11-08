@@ -2,10 +2,11 @@
 
 """TechDraw sheets that stay up to date.
 
-A sheet draws one link group whose element list is "everything drawable": layers, levels,
+A sheet draws one content object whose element list is "everything drawable": layers, levels,
 groups (the electrical installation among them) and loose visible objects. The list is marked
 AutoSources and rebuilt whenever objects are created or deleted, so items added later show up
-on the sheet by themselves. The load schedule goes on its own page, its range following the
+on the sheet by themselves. The content only points at the objects: it does not hold them the
+way a group does, so it never hides them in the 3D view. The load schedule goes on its own page, its range following the
 table as it grows.
 """
 
@@ -54,6 +55,39 @@ def _type(obj):
     return getattr(getattr(obj, "Proxy", None), "Type", None)
 
 
+def is_content(obj):
+    """A sheet content (the link groups of older files too)."""
+    return _type(obj) == "SheetContent" or obj.TypeId == "App::LinkGroup"
+
+
+class SheetContent:
+    """What a plan sheet draws: a list of objects (ElementList), drawn by Draft's get_svg."""
+
+    Type = "SheetContent"
+
+    def __init__(self, obj):
+        obj.Proxy = self
+        obj.addProperty("App::PropertyLinkList", "ElementList", "Folha", "Objetos desenhados na folha")
+        obj.addProperty("App::PropertyBool", AUTO, "Folha", "Acompanhar os objetos do documento")
+
+    def svg_group(self, obj):
+        return list(obj.ElementList)
+
+    def execute(self, obj):
+        pass
+
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+    __getstate__ = dumps
+
+    def __setstate__(self, state):
+        return None
+
+
 def sources(doc):
     """What a sheet draws: layers, levels and groups as a whole, plus loose visible objects."""
     from draftobjects.layer import get_layer
@@ -66,7 +100,7 @@ def sources(doc):
     found = []
     for obj in doc.Objects:
         if obj.Name in SKIP_NAMES or _type(obj) == "ReviewComment" or obj.TypeId.startswith("TechDraw::") \
-                or obj.TypeId in ("App::LinkGroup", "Spreadsheet::Sheet"):
+                or obj.TypeId == "Spreadsheet::Sheet" or is_content(obj):
             continue  # review comments, sheets and tables never go into the drawing
         kind = _type(obj)
         if kind in ("LayerContainer", "SectionPlane"):
@@ -118,7 +152,7 @@ def floor_sources(doc, zmin, zmax):
             for member in members:
                 walk(member)
             return
-        if obj.TypeId.startswith("TechDraw::") or obj.TypeId in ("Spreadsheet::Sheet", "App::LinkGroup"):
+        if obj.TypeId.startswith("TechDraw::") or obj.TypeId == "Spreadsheet::Sheet" or is_content(obj):
             return
         z = _elevation(obj)
         if z is not None and zmin <= z < zmax:
@@ -196,18 +230,38 @@ def _content_sources(doc, content):
 def make_content(doc, objs=None, label="Conteúdo da folha", floor=None):
     """Link group drawn by a sheet. Without `objs` it follows the document (AutoSources), or the
     objects of one floor when `floor` is (zmin, zmax)."""
-    content = doc.addObject("App::LinkGroup", "SheetContent")
+    content = doc.addObject("App::FeaturePython", "SheetContent")
+    SheetContent(content)
     content.Label = label
-    content.addProperty("App::PropertyBool", AUTO, "Folha", "Acompanhar os objetos do documento")
     setattr(content, AUTO, objs is None)
     if floor is not None:
         content.addProperty("App::PropertyFloat", "FloorMin", "Folha", "Andar: cota inicial (mm)")
         content.addProperty("App::PropertyFloat", "FloorMax", "Folha", "Andar: cota final (mm)")
         content.FloorMin, content.FloorMax = floor
     content.ElementList = _content_sources(doc, content) if objs is None else list(objs)
-    if App.GuiUp and content.ViewObject:
-        content.ViewObject.Visibility = False
     return content
+
+
+def _migrate_link_groups(doc):
+    """Sheets of older files drew a hidden link group, which hid its objects in the 3D view:
+    replace it with a SheetContent and show the objects again. True if something changed."""
+    changed = False
+    for old in [o for o in doc.Objects if o.TypeId == "App::LinkGroup" and getattr(o, AUTO, None) is not None]:
+        floor = (old.FloorMin, old.FloorMax) if "FloorMax" in old.PropertiesList else None
+        members = list(old.ElementList)
+        new = make_content(doc, members, old.Label, floor)
+        setattr(new, AUTO, getattr(old, AUTO))
+        for view in doc.findObjects("TechDraw::DrawViewDraft"):
+            if view.Source is not None and view.Source.Name == old.Name:
+                view.Source = new
+        old.ElementList = []
+        doc.removeObject(old.Name)
+        if App.GuiUp:
+            for member in members:  # they were visible when they went in; the group hid them
+                if member.ViewObject is not None:
+                    member.ViewObject.Visibility = True
+        changed = True
+    return changed
 
 
 def make_sheet(doc, sheet="auto", scale=None, objs=None, title=None, line_width=0.35, text_height=2.5, floor=None):
@@ -329,7 +383,7 @@ def follow_schedule(doc):
 
 def sync(doc):
     """Rebuild the element list of every AutoSources sheet content; True if something changed."""
-    changed = False
+    changed = _migrate_link_groups(doc)
     for view in doc.findObjects("TechDraw::DrawViewDraft"):
         # Sheets made before the line spacing was set draw the room name over its area.
         source = view.Source
@@ -338,7 +392,7 @@ def sync(doc):
             view.LineSpacing = spacing
             changed = True
     for obj in doc.Objects:
-        if obj.TypeId == "App::LinkGroup" and getattr(obj, AUTO, False):
+        if _type(obj) == "SheetContent" and getattr(obj, AUTO, False):
             current = _content_sources(doc, obj)
             if [o.Name for o in obj.ElementList] != [o.Name for o in current]:
                 obj.ElementList = current
@@ -382,11 +436,11 @@ class _Observer:
             App.Console.PrintWarning(f"Elétrica: folhas não atualizadas: {e}\n")
 
     def slotCreatedObject(self, obj):
-        if not obj.TypeId.startswith("TechDraw::") and obj.TypeId != "App::LinkGroup":
+        if not obj.TypeId.startswith("TechDraw::") and not is_content(obj):
             self._schedule(obj.Document)
 
     def slotDeletedObject(self, obj):
-        if not obj.TypeId.startswith("TechDraw::") and obj.TypeId != "App::LinkGroup":
+        if not obj.TypeId.startswith("TechDraw::") and not is_content(obj):
             self._schedule(obj.Document)
 
     def slotActivateDocument(self, doc):

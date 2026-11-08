@@ -158,6 +158,13 @@ class TestBim(unittest.TestCase):
         space = call("make_space", name="SALA", boundary=[[75, 75], [5925, 75], [5925, 5925], [75, 5925]])
         self.assertAlmostEqual(space["area_m2"], 5.85 * 5.85, places=2)
 
+    def test_walls_from_a_rectangle_are_walls_not_a_block(self):
+        rect = call("draw_rectangle", origin=[0, 0], width=4000, height=3000)
+        wall = call("make_walls_from_objects", names=[rect["name"]], width=150, height=2800)["walls"][0]
+        doc = App.ActiveDocument
+        volume = doc.getObject(wall["name"]).Shape.Volume
+        self.assertAlmostEqual(volume, 14000 * 150 * 2800, delta=0.02 * 14000 * 150 * 2800)
+
 
 class TestElectrical(unittest.TestCase):
     def setUp(self):

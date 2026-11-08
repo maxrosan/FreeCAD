@@ -228,6 +228,10 @@ class TestSheets(unittest.TestCase):
         names = [o.Name for o in content.ElementList]
         self.assertIn(model.CONTAINER, names)
         self.assertIn("Rectangle", names)
+        # the content only points at what it draws: a (link) group would hide it in the 3D view
+        self.assertNotEqual(content.TypeId, "App::LinkGroup")
+        self.assertIsNone(self.doc.getObject("Rectangle").getParentGroup())
+        self.assertIn("Rectangle", view.Symbol)
         line = Draft.make_line(App.Vector(0, 0, 0), App.Vector(0, 5000, 0))
         self.assertTrue(sheets.sync(self.doc))  # the new loose line joins the sheet
         self.assertIn(line.Name, [o.Name for o in content.ElementList])

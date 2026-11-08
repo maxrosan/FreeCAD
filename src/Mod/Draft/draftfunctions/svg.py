@@ -446,6 +446,29 @@ def get_svg(
     override: bool, optional
         It defaults to `True`.
     """
+    # Objects that list what they draw without holding it the way a group does
+    # (a group, or a link group, can hide its members in the 3D view).
+    members = getattr(getattr(obj, "Proxy", None), "svg_group", None)
+    if callable(members):
+        return "".join(
+            get_svg(
+                child,
+                scale,
+                linewidth,
+                fontsize,
+                fillstyle,
+                direction,
+                linestyle,
+                color,
+                linespacing,
+                techdraw,
+                rotation,
+                fillspaces,
+                override,
+            )
+            for child in members(obj)
+        )
+
     # If this is a group, recursively call this function to gather
     # all the SVG strings from the contents of the group.
     if (

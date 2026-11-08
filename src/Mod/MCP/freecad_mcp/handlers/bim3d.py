@@ -111,6 +111,10 @@ def make_walls_from_objects(names, width=150, height=2800, align="Center", level
 def _make_wall_from(doc, base, width, height, align, level, label, recompute_doc=True):
     if align not in ("Center", "Left", "Right"):
         raise CommandError("align must be Center, Left or Right")
+    if getattr(base, "MakeFace", False):
+        # A filled outline (a Draft rectangle, by default) makes a solid block the size of the
+        # room instead of walls along it.
+        base.MakeFace = False
     wall = _arch().makeWall(base, width=length(width, "width"), height=length(height, "height"), align=align)
     if label:
         wall.Label = label
