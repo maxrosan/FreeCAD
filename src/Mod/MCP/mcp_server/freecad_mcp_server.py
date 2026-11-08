@@ -668,6 +668,9 @@ def draw_conduit(points: list[Point], installation: Literal["teto", "parede", "p
     the circuit number above and its section below when it is not 2,5 mm²; the diameter is written when
     it is not 20 mm (the plan sheet carries a note). The marks go where they overlap no other text, or at
     `marks_at` (0..1 of the length) when given.
+    Indoors (rooms with a ceramic floor) do not use "piso": run in the ceiling/forro and down the wall
+    ("teto"/"parede"), even to sockets. "piso"/"enterrado" are for outdoor areas; the electrical check
+    warns about floor conduits inside a room.
     nivel: floor (BIM level name or elevation)."""
     return fc("draw_conduit", points=points, installation=installation, circuits=circuits, extra=extra,
               diameter=diameter, marks_at=marks_at, label=label, automatic=automatic, nivel=nivel)

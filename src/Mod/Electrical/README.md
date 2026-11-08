@@ -33,7 +33,9 @@ Building electrical plans in FreeCAD, Brazilian conventions:
   unifilar", an SVG on a TechDraw page) and the bill of materials (cables per section and
   function, conduits, boxes, devices, breakers, RCDs, surge protectors, panels with spare ways).
 * **Checks** (NBR 5410): lighting VA and number/VA of sockets per room (BIM spaces of each floor),
-  circuit protection, conductors and voltage drop, RCDs, phase balance, items no conduit reaches.
+  circuit protection, conductors and voltage drop, RCDs, phase balance, items no conduit reaches,
+  floor conduits inside a room (under the ceramic: indoors they go down the wall from the forro;
+  floor and buried runs are for outdoor areas).
   Estimates for review, not a design approval.
 * **Sheets that stay up to date**: one plan page per floor (or one for the whole document), and
   pages for the schedule, the single-line diagram and the materials.
@@ -50,7 +52,7 @@ Building electrical plans in FreeCAD, Brazilian conventions:
   faster, Esc ends), stopped by the walls; PageUp/PageDown or the buttons of its window go to the
   floor above/below. While walking, the floors above, the BIM rooms and the plan symbols are
   hidden and the 3D shows only that floor, with a translucent forro under each room's ceiling;
-  all comes back at the end. With the mouse in the 3D view, drag to look around and roll the
+  all comes back at the end (saving during the walk saves the document as it is outside it). With the mouse in the 3D view, drag to look around and roll the
   wheel to walk.
 * **Legible plans.** Texts are filled glyphs without an outline (an outline makes small text look
   bold), in the 3D view and on sheets. The power and circuit of each item, and the conductor

@@ -56,6 +56,26 @@ def room_of(point, room_list):
     return None
 
 
+def indoor_floor_conduits(doc, room_list=None):
+    """Floor conduits ("piso") that run inside a room: under the ceramic floor, which is not
+    recommended indoors (go down the wall from the forro instead). Outdoors they are fine."""
+    room_list = rooms(doc) if room_list is None else room_list
+    found = []
+    for c in model.conduits(doc):
+        if getattr(c, "Installation", "") != "piso" or c.Shape.isNull():
+            continue
+        z = c.Shape.BoundBox.ZMin
+        probes = [e.valueAt(e.FirstParameter + 0.5 * (e.LastParameter - e.FirstParameter)) for e in c.Shape.Edges]
+        for room in room_list:
+            if not room["zmin"] - model.FLOOR_TOLERANCE <= z < room["zmax"] - 1:
+                continue
+            face = room["face"]
+            if any(face.isInside(App.Vector(p.x, p.y, face.BoundBox.ZMin), 1.0, True) for p in probes):
+                found.append((c, room["name"]))
+                break
+    return found
+
+
 def check(doc):
     doc.recompute()
     report = {"system": model.system_of(doc), "circuits": [], "rooms": [], "warnings": [],
@@ -87,6 +107,9 @@ def check(doc):
     report["floors"] = model.floors(doc)
 
     room_list = rooms(doc)
+    for c, room in indoor_floor_conduits(doc, room_list):
+        report["warnings"].append(f"{c.Label}: eletroduto no piso dentro de {room} (sob a cerâmica); "
+                                  "em área interna prefira descer pela parede a partir do forro")
     by_room = {id(r): [] for r in room_list}
     for p in model.points(doc):
         room = room_of(p, room_list)

@@ -432,6 +432,18 @@ class TestNetwork(unittest.TestCase):
         self.assertTrue(upper)
         self.assertTrue(all(o.Shape.BoundBox.ZMin >= 2000 for o in upper if hasattr(o, "Shape")))
 
+    def test_indoor_floor_conduit_warned(self):
+        V = App.Vector
+        _space(self.doc, "Sala", 0, 0, 4000, 4000, 0.0)
+        inside = model.make_conduit(self.doc, [V(500, 500, 0), V(3000, 500, 0)], "piso")
+        model.make_conduit(self.doc, [V(5000, 500, 0), V(8000, 500, 0)], "piso")  # outdoors: fine
+        model.make_conduit(self.doc, [V(500, 1000, 0), V(3000, 1000, 0)], "teto")
+        self.doc.recompute()
+        found = checks.indoor_floor_conduits(self.doc)
+        self.assertEqual([(c.Name, room) for c, room in found], [(inside.Name, "Sala")])
+        report = checks.check(self.doc)
+        self.assertEqual(sum("no piso dentro de Sala" in w for w in report["warnings"]), 1)
+
 
 class TestOutputs(unittest.TestCase):
     def setUp(self):

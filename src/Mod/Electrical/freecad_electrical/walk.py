@@ -162,6 +162,7 @@ class Walk:
         self._ceiling_before = None  # the 3D's forro setting before the walk
         self._saved = None
         self._filter = None
+        self._observer = None
         self.panel = None
 
     @property
@@ -186,6 +187,7 @@ class Walk:
             pass
         walk.apply_visibility()
         walk.place()
+        walk._watch_saves()
         walk._install_keys()
         walk._open_panel()
         return walk
@@ -196,6 +198,9 @@ class Walk:
         if self._filter is not None:
             QtWidgets.QApplication.instance().removeEventFilter(self._filter)
             self._filter = None
+        if self._observer is not None:
+            App.removeDocumentObserver(self._observer)
+            self._observer = None
         self._restore_visibility()
         self._model_floor(None)
         if self._saved is not None:
@@ -210,6 +215,32 @@ class Walk:
             panel.close()
         if Walk.current is self:
             Walk.current = None
+
+    def _watch_saves(self):
+        """What the walk hides (and the 3D showing one floor) must not go into the file: saving
+        during the walk saves the document as it is outside it, then the walk goes on. Closing
+        the document ends the walk."""
+        walk = self
+
+        class Saves:
+            def slotStartSaveDocument(self, doc, filename):
+                if doc is walk.doc and Walk.current is walk:
+                    walk._restore_visibility()
+                    walk._model_floor(None, refresh=False)
+
+            def slotFinishSaveDocument(self, doc, filename):
+                if doc is walk.doc and Walk.current is walk:
+                    walk.apply_visibility()
+                    walk.place()
+
+            def slotDeletedDocument(self, doc):
+                if doc is walk.doc and Walk.current is walk:
+                    walk._saved = None  # its view is gone
+                    walk._visibility = {}
+                    walk.stop()
+
+        self._observer = Saves()
+        App.addDocumentObserver(self._observer)
 
     # -- what is shown ---------------------------------------------------------------------------
 
@@ -227,7 +258,7 @@ class Walk:
         self._visibility.setdefault(obj.Name, True)
         vobj.Visibility = False
 
-    def _model_floor(self, z):
+    def _model_floor(self, z, refresh=True):
         """The 3D installation is one object: it shows only the floor walked on (or all)."""
         from . import model3d
 
@@ -246,7 +277,8 @@ class Walk:
             changed = True
         if changed:
             obj.recompute()
-            self._refresh_clipping()
+            if refresh:
+                self._refresh_clipping()
 
     def _refresh_clipping(self):
         """The view keeps clipping to the old size of the scene after the 3D changed (the walk
