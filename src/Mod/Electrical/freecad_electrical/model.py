@@ -138,10 +138,20 @@ class Installation(_Proxy):
              ("App::PropertyFloat", "AmbientTemperature", "Instalação",
               "Temperatura ambiente (°C), para o fator de correção dos condutores", 30.0, 0),
              ("App::PropertyFloat", "MaxVoltageDrop", "Instalação",
-              "Queda de tensão máxima dos circuitos terminais (%)", calc.MAX_VOLTAGE_DROP, 0)]
+              "Queda de tensão máxima dos circuitos terminais (%)", calc.MAX_VOLTAGE_DROP, 0),
+             ("App::PropertyStringList", "WalkHidden", "Instalação",
+              "Objetos escondidos pelo passeio (mostrados de novo ao abrir o arquivo)", None, 2)]
 
     def onDocumentRestored(self, obj):
         _ensure(obj, self.SPECS)
+        hidden = list(getattr(obj, "WalkHidden", []) or [])
+        if hidden:
+            # a file written during a walk (the recovery file): show what the walk had hidden
+            for name in hidden:
+                other = obj.Document.getObject(name)
+                if other is not None and "Visibility" in other.PropertiesList:
+                    other.Visibility = True
+            obj.WalkHidden = []
 
     def onChanged(self, obj, prop):
         if prop in ("Scale", "System", "CeilingHeight", "AmbientTemperature", "MaxVoltageDrop") \
@@ -842,6 +852,8 @@ class Conduit(_Proxy):
         if prop == "Placement" and not getattr(self, "_building", False):
             _absorb_placement(obj)
         elif prop in ("Points", "Installation", "Automatic") and not _restoring(obj):
+            if prop == "Installation":
+                _relabel_conduit(obj)
             network_changed(obj.Document)
 
     def groups(self, obj, fraction=None):
@@ -996,6 +1008,17 @@ def _point_along(pts, fraction):
         target = seg
     direction = App.Vector(b - a).normalize() if (b - a).Length > 1e-9 else App.Vector(1, 0, 0)
     return a + direction * target, direction
+
+
+def _relabel_conduit(obj):
+    """A name given by make_conduit ("Eletroduto (piso)001") follows the installation; a name
+    given by hand stays."""
+    import re
+
+    label = getattr(obj, "Label", "")
+    new = re.sub(r"^Eletroduto \((?:%s)\)" % "|".join(INSTALLATIONS), f"Eletroduto ({obj.Installation})", label)
+    if new != label:
+        obj.Label = new
 
 
 def make_conduit(doc, points, installation="teto", circuits=(), extra=(), diameter="", marks_at=None, label=None,

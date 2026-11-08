@@ -250,6 +250,17 @@ class Walk:
             if obj is not None and obj.ViewObject is not None:
                 obj.ViewObject.Visibility = visible
         self._visibility = {}
+        self._record_hidden()
+
+    def _record_hidden(self):
+        """The objects the walk hides, kept in the installation: a recovery file written during
+        the walk shows them again when opened."""
+        inst = model.installation(self.doc, create=False)
+        if inst is None or "WalkHidden" not in inst.PropertiesList:
+            return
+        names = sorted(self._visibility)
+        if list(inst.WalkHidden) != names:
+            inst.WalkHidden = names
 
     def _hide(self, obj):
         vobj = getattr(obj, "ViewObject", None)
@@ -308,6 +319,7 @@ class Walk:
                     and not obj.isDerivedFrom("App::DocumentObjectGroup"):
                 if shape.BoundBox.ZMin > z + model.FLOOR_TOLERANCE:  # floors above: they would cover the view
                     self._hide(obj)
+        self._record_hidden()
 
     # -- moving ----------------------------------------------------------------------------------
 

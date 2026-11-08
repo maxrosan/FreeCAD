@@ -443,6 +443,15 @@ class TestNetwork(unittest.TestCase):
         self.assertEqual([(c.Name, room) for c, room in found], [(inside.Name, "Sala")])
         report = checks.check(self.doc)
         self.assertEqual(sum("no piso dentro de Sala" in w for w in report["warnings"]), 1)
+        # moved to the wall: its name follows; a name given by hand stays
+        self.assertTrue(inside.Label.startswith("Eletroduto (piso)"))
+        inside.Installation = "parede"
+        self.assertTrue(inside.Label.startswith("Eletroduto (parede)"))
+        named = model.make_conduit(self.doc, [V(0, 0, 0), V(100, 0, 0)], "piso", label="Ramal do jardim")
+        named.Installation = "enterrado"
+        self.assertEqual(named.Label, "Ramal do jardim")
+        self.doc.recompute()
+        self.assertEqual(checks.indoor_floor_conduits(self.doc), [])
 
 
 class TestOutputs(unittest.TestCase):
@@ -556,6 +565,31 @@ class Test3D(unittest.TestCase):
     def _solids_at(self, shape, x, y, tol=200):
         return [s for s in shape.Solids
                 if abs(s.BoundBox.Center.x - x) < tol and abs(s.BoundBox.Center.y - y) < tol]
+
+    def test_file_saved_during_a_walk_opens_whole(self):
+        import os
+        import tempfile
+
+        from freecad_electrical import model3d
+
+        _house(self.doc)
+        obj = model3d.model3d(self.doc)
+        self.doc.recompute()
+        point = model.points(self.doc)[0].Name
+        # what the walk leaves while it runs (a recovery file catches it like this)
+        self.doc.getObject(point).Visibility = False
+        model.installation(self.doc).WalkHidden = [point]
+        obj.VisibleFloor = "0"
+        obj.ShowCeiling = True
+        path = os.path.join(tempfile.mkdtemp(), "passeio.FCStd")
+        self.doc.saveAs(path)
+        App.closeDocument(self.doc.Name)
+        self.doc = App.openDocument(path)
+        obj = model3d.model3d(self.doc, create=False)
+        self.assertEqual(obj.VisibleFloor, "")
+        self.assertFalse(obj.ShowCeiling)
+        self.assertTrue(self.doc.getObject(point).Visibility)
+        self.assertEqual(list(model.installation(self.doc).WalkHidden), [])
 
     def test_runs_drops_and_boxes_from_the_plan(self):
         from freecad_electrical import model3d

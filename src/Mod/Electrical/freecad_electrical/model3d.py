@@ -603,6 +603,12 @@ class Installation3D(model._Proxy):
 
     def onDocumentRestored(self, obj):
         self._visible(obj)
+        if getattr(obj, "VisibleFloor", ""):
+            # one floor only is the walk's view; a file kept that way (a recovery file written
+            # during a walk) opens with every floor and without the walk's forro
+            obj.VisibleFloor = ""
+            obj.ShowCeiling = False
+            obj.touch()
         if "View" not in obj.PropertiesList:
             obj.addProperty("App::PropertyLink", "View", "Instalação 3D", "Vista isométrica na folha")
         if "IsoScale" not in obj.PropertiesList:
