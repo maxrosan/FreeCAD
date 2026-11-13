@@ -150,6 +150,36 @@ def _text(doc, position, text, rotation=0, **_):
     return _draft().make_text(lines, placement=placement)
 
 
+# Dimensions as Brazilian architectural plans draw them: oblique ticks at the ends, extension lines
+# that start a little off the object and cross the dimension line, the value in metres with two
+# decimals and no unit ("3,62"). Paper sizes in mm: the annotation scale enlarges them.
+DIMENSION_STYLE = {
+    "ArrowTypeStart": "Tick-2",  # a thin 45° stroke, 4 x the size long ("Tick" is a filled wedge)
+    "ArrowTypeEnd": "Tick-2",
+    "ArrowSizeStart": 0.5,
+    "ArrowSizeEnd": 0.5,
+    "ExtLines": -1.5,  # negative: a gap of 1,5 mm between the object and the extension line
+    "ExtOvershoot": 1.0,
+    "DimOvershoot": 1.0,
+    "UnitOverride": "m",
+    "Decimals": 2,
+    "ShowUnit": False,
+}
+
+
+def dimension_style(obj):
+    """Give a Draft dimension the plan style (DIMENSION_STYLE)."""
+    vobj = obj.ViewObject if App.GuiUp else None
+    if vobj is None:
+        return
+    for prop, value in DIMENSION_STYLE.items():
+        if prop in vobj.PropertiesList:
+            try:
+                setattr(vobj, prop, value)
+            except Exception as e:
+                App.Console.PrintLog(f"MCP: dimension {prop}: {e}\n")
+
+
 def _dimension(doc, p1, p2, offset=None, dim_point=None, **_):
     a, b = point(p1, "p1"), point(p2, "p2")
     if dim_point is not None:
@@ -162,7 +192,10 @@ def _dimension(doc, p1, p2, offset=None, dim_point=None, **_):
         normal = App.Vector(-d.y, d.x, 0).normalize()
         mid = (a + b) * 0.5
         dim_line = mid + normal * (length(offset, "offset") if offset is not None else 500.0)
-    return _draft().make_linear_dimension(a, b, dim_line)
+    dim = _draft().make_linear_dimension(a, b, dim_line)
+    if dim is not None:
+        dimension_style(dim)
+    return dim
 
 
 _BUILDERS = {

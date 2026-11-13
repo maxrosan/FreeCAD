@@ -55,7 +55,8 @@ starts FreeCAD outside that tree (through WMI if needed), so the drawing stays o
 
 * Documents and view: `new_document`, `get_document_summary`, `get_screenshot`, `undo`, `run_python`...
 * 2D (Draft): `draw_line`, `draw_polyline`, `draw_rectangle`, `draw_arc`, `draw_text`,
-  `draw_dimension`, `draw_batch`, layers and styles.
+  `draw_dimension`, `draw_batch`, layers and styles. Dimensions follow Brazilian plans: 45° ticks,
+  extension lines off the object and past the dimension line, values in metres ("3,62").
 * 3D (BIM): `make_level`, `make_wall`, `make_walls`, `make_walls_from_objects`, `add_opening`
   (doors and windows hosted in walls; doors open at 90°, as plans draw them), `make_space`
   (rooms with area). `set_view` / `get_screenshot` show the top view of a building cut at 1,5 m

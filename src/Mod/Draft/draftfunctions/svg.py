@@ -253,7 +253,11 @@ def _svg_dimension(
         _err("'{}': doesn't have points, " "SVG cannot be generated".format(obj.Label))
         return ""
 
-    ts = len(prx.string) * vobj.FontSize.Value / 4.0
+    # Arrow, overshoot and font sizes are paper sizes, enlarged by the annotation scale, as the
+    # 3D view draws them; without it they are a fraction of a millimetre in the model.
+    mult = getattr(vobj, "ScaleMultiplier", 1.0) or 1.0
+
+    ts = len(prx.string) * vobj.FontSize.Value * mult / 4.0
     rm = (prx.p3 - prx.p2).Length / 2.0 - ts
 
     _diff32 = prx.p3 - prx.p2
@@ -335,12 +339,12 @@ def _svg_dimension(
 
         # drawing dimension and extension lines overshoots
         if hasattr(vobj, "DimOvershoot") and vobj.DimOvershoot.Value:
-            shootsize = vobj.DimOvershoot.Value / pointratio
+            shootsize = vobj.DimOvershoot.Value * mult / pointratio
             svg += get_overshoot(p2, shootsize, stroke, linewidth, angle)
             svg += get_overshoot(p3, shootsize, stroke, linewidth, angle + math.pi)
 
         if hasattr(vobj, "ExtOvershoot") and vobj.ExtOvershoot.Value:
-            shootsize = vobj.ExtOvershoot.Value / pointratio
+            shootsize = vobj.ExtOvershoot.Value * mult / pointratio
             shootangle = -DraftVecUtils.angle(p1 - p2)
             svg += get_overshoot(p2, shootsize, stroke, linewidth, shootangle)
             svg += get_overshoot(p3, shootsize, stroke, linewidth, shootangle)
@@ -361,7 +365,7 @@ def _svg_dimension(
                 obj,
                 vobj.ArrowTypeStart,
                 p2,
-                vobj.ArrowSizeStart.Value / pointratio,
+                vobj.ArrowSizeStart.Value * mult / pointratio,
                 stroke,
                 linewidth,
                 angle,
@@ -371,7 +375,7 @@ def _svg_dimension(
                 obj,
                 vobj.ArrowTypeEnd,
                 p3,
-                vobj.ArrowSizeEnd.Value / pointratio,
+                vobj.ArrowSizeEnd.Value * mult / pointratio,
                 stroke,
                 linewidth,
                 angle + math.pi,
@@ -670,6 +674,7 @@ def get_svg(
             if vobj.Proxy:
                 if hasattr(vobj.Proxy, "circle"):
                     prx = vobj.Proxy
+                    mult = getattr(vobj, "ScaleMultiplier", 1.0) or 1.0  # paper sizes, as in 3D
                     p1 = get_proj(prx.p1, plane)
                     p2 = get_proj(prx.p2, plane)
                     p3 = get_proj(prx.p3, plane)
@@ -691,7 +696,7 @@ def get_svg(
                     )
 
                     if hasattr(vobj, "DimOvershoot") and vobj.DimOvershoot.Value:
-                        shootsize = vobj.DimOvershoot.Value / pointratio
+                        shootsize = vobj.DimOvershoot.Value * mult / pointratio
                         tangent1 = get_proj(prx.circle.tangentAt(prx.circle.FirstParameter), plane)
                         tangent2 = get_proj(prx.circle.tangentAt(prx.circle.LastParameter), plane)
                         if not DraftVecUtils.isNull(tangent1):
@@ -708,7 +713,7 @@ def get_svg(
                             )
 
                     if hasattr(vobj, "ExtOvershoot") and vobj.ExtOvershoot.Value:
-                        shootsize = vobj.ExtOvershoot.Value / pointratio
+                        shootsize = vobj.ExtOvershoot.Value * mult / pointratio
                         ext1 = p1 - p2
                         ext2 = p4 - p3
                         if not DraftVecUtils.isNull(ext1):
@@ -754,12 +759,12 @@ def get_svg(
                         and hasattr(vobj, "ArrowSizeStart")
                         and hasattr(vobj, "ArrowSizeEnd")
                     ):
-                        arrowsizestart = vobj.ArrowSizeStart.Value / pointratio
+                        arrowsizestart = vobj.ArrowSizeStart.Value * mult / pointratio
                         halfstartarrowlength = 2 * arrowsizestart
                         startarrowangle = 2 * math.asin(
                             halfstartarrowlength / prx.circle.Curve.Radius
                         )
-                        arrowsizeend = vobj.ArrowSizeEnd.Value / pointratio
+                        arrowsizeend = vobj.ArrowSizeEnd.Value * mult / pointratio
                         halfendarrowlength = 2 * arrowsizeend
                         endarrowangle = 2 * math.asin(halfendarrowlength / prx.circle.Curve.Radius)
                         if hasattr(vobj, "FlipArrows") and vobj.FlipArrows:
