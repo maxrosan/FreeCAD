@@ -133,6 +133,7 @@ def redo(steps=1):
 @command("save_document")
 def save_document(path=None):
     doc = active_document(create=False)
+    recompute(doc, full=True)  # the file keeps the sheets and tables up to date
     if path:
         path = os.path.abspath(path)
         if not path.lower().endswith(".fcstd"):
@@ -148,7 +149,7 @@ def save_document(path=None):
 @command("recompute")
 def recompute_document():
     doc = active_document(create=False)
-    return {"errors": recompute(doc)}
+    return {"errors": recompute(doc, full=True)}
 
 
 @command("set_drawing_scale", transaction=True)

@@ -76,7 +76,12 @@ def settings(doc, create=True):
     return obj
 
 
-def recompute(doc):
-    doc.recompute()
+def recompute(doc, full=False):
+    """Recompute the document. While the assistant draws live in the GUI, heavy outputs (pages,
+    tables, the electrical sheets and 3D) wait for its pause; `full` recomputes them now, for
+    commands that return results computed from them."""
+    from .. import live
+
+    live.recompute(doc, full=full)
     errors = [o.Label for o in doc.Objects if "Invalid" in o.State or "Error" in o.State]
     return errors

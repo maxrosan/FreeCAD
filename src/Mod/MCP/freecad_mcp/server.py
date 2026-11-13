@@ -24,6 +24,7 @@ class CommandServer(QtCore.QObject):
     def __init__(self, port, parent=None):
         super().__init__(parent)
         self._buffers = {}
+        self._busy = False  # a command is running (it repaints the window, so sockets may be read meanwhile)
         self._tcp = QtNetwork.QTcpServer(self)
         self._tcp.newConnection.connect(self._on_new_connection)
         if not self._tcp.listen(QtNetwork.QHostAddress(QtNetwork.QHostAddress.LocalHost), port):
@@ -49,12 +50,28 @@ class CommandServer(QtCore.QObject):
 
     def _on_ready_read(self, sock):
         self._buffers[sock] = self._buffers.get(sock, b"") + bytes(sock.readAll())
-        while b"\n" in self._buffers[sock]:
-            line, self._buffers[sock] = self._buffers[sock].split(b"\n", 1)
-            if line.strip():
+        self._drain()
+
+    def _drain(self):
+        """Run the waiting requests one at a time: a request that arrives while a command runs
+        (and repaints the window) waits in the queue instead of running inside it."""
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            while True:
+                sock = next((s for s, data in self._buffers.items() if b"\n" in data), None)
+                if sock is None:
+                    break
+                line, self._buffers[sock] = self._buffers[sock].split(b"\n", 1)
+                if not line.strip():
+                    continue
                 reply = handle_line(line)
-                sock.write(reply.encode("utf-8") + b"\n")
-                sock.flush()
+                if sock in self._buffers:  # the client may have gone meanwhile
+                    sock.write(reply.encode("utf-8") + b"\n")
+                    sock.flush()
+        finally:
+            self._busy = False
 
 
 def handle_line(line):

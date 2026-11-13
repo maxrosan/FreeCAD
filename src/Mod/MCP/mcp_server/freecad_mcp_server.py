@@ -271,7 +271,8 @@ def get_screenshot(direction: Literal["top", "bottom", "front", "rear", "left", 
 @tool()
 def run_python(code: str) -> dict:
     """Run Python inside FreeCAD (App, Gui available). Assign to `result` to return a value.
-    Use for anything the other tools do not cover. One undo step."""
+    Use for anything the other tools do not cover. One undo step. In loops that create many
+    objects, call `pulse()` (or `pulse("texto")`) so the person sees them appear as they are made."""
     return fc("run_python", code=code)
 
 

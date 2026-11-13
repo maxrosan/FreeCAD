@@ -17,6 +17,14 @@ Claude ──stdio (MCP)──► mcp_server/freecad_mcp_server.py ──TCP 127
 * `mcp_server/freecad_mcp_server.py` is the MCP server the assistant runs. It forwards
   drawing tools to FreeCAD, and reads PDFs itself with pdfplumber and pypdfium2.
   When FreeCAD is not running it starts `FREECAD_EXE`.
+* Drawing live (`freecad_mcp/live.py`): while a command runs, what it creates shows as it is
+  made (long commands repaint between items; `run_python` code can call `pulse()`), the newest
+  objects are highlighted, the 3D view opens up to keep the whole drawing of the command in
+  sight, and the status bar says what the assistant is doing. Heavy outputs (TechDraw pages,
+  spreadsheets, the electrical sheets, schedule and 3D) are recomputed once the assistant pauses
+  for 0,7 s; tools that return results computed from them (load and demand summaries,
+  materials, 3D, screenshots, exports, save) recompute them first. Mouse and keyboard input,
+  and requests arriving meanwhile, wait for the running command.
 
 Everything is modelled at real size in mm. The drawing scale (1:N) only converts PDF
 measurements to real sizes and sets the scale of TechDraw sheets.

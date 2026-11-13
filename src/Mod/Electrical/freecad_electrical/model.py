@@ -267,7 +267,11 @@ class ElectricalPoint(_Proxy):
         prims, frame = point_parts(obj)
         from . import layout
 
-        shape, labels = geometry.build_shape(prims, frame, layout.slot_of(obj))
+        slot = layout.slot_of(obj)
+        key = repr((prims, frame.key(), slot))
+        if _unchanged(obj, key):
+            return  # touched with the others, but its drawing is the same: no rebuild, no redraw
+        shape, labels = geometry.build_shape(prims, frame, slot)
         self._building = True
         try:
             obj.Shape = shape
@@ -282,6 +286,23 @@ def _empty_shape():
     import Part
 
     return Part.Shape()
+
+
+_DRAWN = {}  # (document, object) -> key of what its shape was built from
+
+
+def _unchanged(obj, key):
+    """True when obj's shape was already built from `key` (and is still there); records the key
+    otherwise. Items and conduits are all touched when anything changes (their texts may move),
+    but most of them stay as they are."""
+    doc = obj.Document
+    ident = (doc.Name if doc else "", obj.Name)
+    shape = getattr(obj, "Shape", None)
+    if _DRAWN.get(ident) == key and shape is not None and not shape.isNull() \
+            and obj.Placement.isIdentity():
+        return True
+    _DRAWN[ident] = key
+    return False
 
 
 def point_parts(obj):
@@ -489,9 +510,10 @@ class Circuit(_Proxy):
             network_changed(obj.Document)  # routing, feeders and outputs
 
     def execute(self, obj):
-        from . import network
+        from . import layout, network
 
         doc = obj.Document
+        layout.inputs_changed(doc)  # its section is written on the plan
         system = system_of(doc)
         inst = installation(doc, create=False)
         members = circuit_points(obj)
@@ -896,6 +918,10 @@ class Conduit(_Proxy):
         if not sections and obj.Installation == "enterrado":
             conduit = entrance(obj.Document)["conduit"]
             obj.DiameterSuggested = str(conduit) if conduit else ""
+        key = repr(([tuple(round(c, 6) for c in p) for p in pts], obj.Installation, round(scale, 6), prims,
+                    frame.key() if frame is not None else None))
+        if _unchanged(obj, key):
+            return
         labels = None
         if prims:
             marks, labels = geometry.build_shape(prims, frame)
@@ -1269,6 +1295,9 @@ class _Observer:
     def slotBeforeRecomputeDocument(self, doc):
         """A file saved by an older version got new properties: compute them on its first
         recompute (marks set while restoring are cleared when the restore ends)."""
+        from . import layout
+
+        layout.begin_recompute(doc)
         if doc.Name not in _MIGRATED:
             return
         names = _MIGRATED.pop(doc.Name, [])
@@ -1280,6 +1309,12 @@ class _Observer:
             network_changed(doc)
 
 
+    def slotRecomputedDocument(self, doc):
+        from . import layout
+
+        layout.end_recompute(doc)
+
+
 _MIGRATED = {}  # document name -> objects that got new properties while restoring
 
 
@@ -1287,6 +1322,10 @@ def _later(doc):
     """Recompute after the deletion is finished (GUI); without the GUI the caller recomputes."""
     if not App.GuiUp:
         return
+    from . import sheets
+
+    if sheets.updates_held():
+        return  # someone is drawing (the MCP): it recomputes when they pause
     from PySide import QtCore
 
     name = doc.Name

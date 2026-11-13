@@ -60,6 +60,10 @@ def get_screenshot(direction="top", width=1600, height=1200, fit=True, backgroun
     """Save the 3D view as PNG and return its path."""
     import FreeCADGui as Gui
 
+    from .common import recompute
+
+    if App.ActiveDocument is not None:
+        recompute(App.ActiveDocument, full=True)  # the 3D installation may be waiting for the pause
     view = _active_view()
     Gui.Selection.clearSelection()  # selected objects would be drawn in the highlight color
     _set_view(view, direction, fit)

@@ -37,9 +37,12 @@ def call(name, params=None):
     if name not in _commands:
         return {"error": {"message": f"Unknown command: {name}"}}
     func, transaction = _commands[name]
+    from . import live
+
     doc = App.ActiveDocument if transaction else None
     if doc:
         doc.openTransaction(f"MCP: {name}")
+    live.begin(name)
     try:
         result = func(**(params or {}))
     except Exception as e:
@@ -48,6 +51,8 @@ def call(name, params=None):
         if not isinstance(e, (CommandError, TypeError, ValueError)):
             error["traceback"] = traceback.format_exc()
         return {"error": error}
+    finally:
+        live.end()
     _end_transaction(doc, commit=True)
     return {"result": result}
 

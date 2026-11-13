@@ -227,7 +227,7 @@ def set_circuit(number, new_number=None, description=None, kind=None, connection
 @command("load_summary")
 def load_summary():
     doc = active_document(create=False)
-    recompute(doc)
+    recompute(doc, full=True)
     return model.load_summary(doc)
 
 
@@ -245,7 +245,7 @@ def demand_summary(panel=None):
     """Installed load, demand and service entrance category (Neoenergia DIS-NOR-030) of each panel
     that no feeder supplies (or of `panel`)."""
     doc = active_document(create=False)
-    recompute(doc)
+    recompute(doc, full=True)
     names = [panel] if panel else (model.top_panels(doc) or [None])
     return {"entrances": [model.demand_summary(doc, name) for name in names]}
 
@@ -254,7 +254,7 @@ def demand_summary(panel=None):
 def bill_of_materials():
     """Cables, conduits, boxes, devices and protection, from the items and the conduit routes."""
     doc = active_document(create=False)
-    recompute(doc)
+    recompute(doc, full=True)
     rows, notes = outputs.bill_of_materials(doc)
     return {"items": [{"group": g, "item": i, "unit": u, "quantity": q} for g, i, u, q in rows], "notes": notes}
 
@@ -280,7 +280,7 @@ def electrical_3d(page=True, circuits=None):
         except ValueError as e:
             raise CommandError(str(e)) from e
     obj.touch()
-    recompute(doc)
+    recompute(doc, full=True)
     out = {"name": obj.Name, "label": obj.Label, "solids": len(obj.Shape.Solids),
            "circuits_shown": list(obj.VisibleCircuits) or "todos"}
     box = obj.Shape.BoundBox if not obj.Shape.isNull() else None

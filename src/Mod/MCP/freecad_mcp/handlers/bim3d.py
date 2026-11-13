@@ -4,6 +4,7 @@
 
 import FreeCAD as App
 
+from .. import live
 from ..registry import CommandError, command
 from ..units import length, point
 from ..units import points as to_points
@@ -102,8 +103,10 @@ def make_walls(points, closed=False, width=150, height=2800, align="Center", lev
 def make_walls_from_objects(names, width=150, height=2800, align="Center", level=None):
     """Turn existing lines/polylines (e.g. wall centre lines traced over a PDF) into walls."""
     doc = active_document(create=False)
-    walls = [_make_wall_from(doc, get_object(doc, n), width, height, align, level, None, recompute_doc=False)
-             for n in names]
+    walls = []
+    for i, n in enumerate(names):
+        walls.append(_make_wall_from(doc, get_object(doc, n), width, height, align, level, None, recompute_doc=False))
+        live.pulse(f"levantando paredes ({i + 1} de {len(names)})")
     recompute(doc)
     return {"walls": [_wall_info(doc.getObject(w["name"])) for w in walls]}
 
@@ -194,7 +197,7 @@ def add_opening(wall, kind="door", position=0, width=None, height=None, sill=Non
         win.Label = label
     # The preset frame is offset from its placement plane (by o2 and w2); centre it in the wall.
     # Only the solids count: the plan symbol (door swing) sticks out of the wall.
-    doc.recompute()
+    live.recompute(doc)
     box = solid_box(win.Shape)
     if box is not None and win.Base is not None:
         off = (box.Center - start).dot(right)
@@ -232,7 +235,7 @@ def make_space(name, boundary=None, object_name=None, height=2800, level=None):
     for obj in (outline, base):
         if App.GuiUp and obj.ViewObject:
             obj.ViewObject.Visibility = False
-    doc.recompute()
+    live.recompute(doc)
     if not base.Shape.Solids:
         raise CommandError("The boundary is not a closed outline; cannot make a room from it")
     space = _arch().makeSpace(base)

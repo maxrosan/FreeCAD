@@ -13,8 +13,11 @@ from ..registry import command
 
 @command("run_python", transaction=True)
 def run_python(code):
-    """Execute ``code``. Assign to ``result`` to return a value; print() output is returned too."""
-    namespace = {"App": App, "FreeCAD": App, "__name__": "__mcp__"}
+    """Execute ``code``. Assign to ``result`` to return a value; print() output is returned too.
+    ``pulse(text=None)`` shows what was drawn so far (call it in long loops)."""
+    from .. import live
+
+    namespace = {"App": App, "FreeCAD": App, "__name__": "__mcp__", "pulse": live.pulse}
     if App.GuiUp:
         import FreeCADGui
 
@@ -23,7 +26,7 @@ def run_python(code):
     with contextlib.redirect_stdout(out):
         exec(compile(code, "<mcp>", "exec"), namespace)
     if App.ActiveDocument:
-        App.ActiveDocument.recompute()
+        live.recompute(App.ActiveDocument)
     reply = {"stdout": out.getvalue()}
     if "result" in namespace:
         value = namespace["result"]

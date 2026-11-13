@@ -352,6 +352,69 @@ class TestProtocol(unittest.TestCase):
         reply = json.loads(server.handle_line(b"not json"))
         self.assertIn("Bad request", reply["error"]["message"])
 
+    def test_requests_wait_for_the_running_command(self):
+        try:
+            from freecad_mcp import server
+        except ImportError as e:
+            self.skipTest(f"Qt not available: {e}")
+
+        class Sock:
+            def __init__(self):
+                self.sent = []
+
+            def write(self, data):
+                self.sent.append(json.loads(data))
+
+            def flush(self):
+                pass
+
+        srv = server.CommandServer(0)
+        try:
+            sock = Sock()
+            srv._buffers[sock] = b'{"id": 1, "method": "ping"}\n{"id": 2, "method": "ping"}\n{"id": 3'
+            srv._busy = True  # a command is running and repainting: nothing runs inside it
+            srv._drain()
+            self.assertEqual(sock.sent, [])
+            srv._busy = False  # done: the queue runs in order, the partial line waits
+            srv._drain()
+            self.assertEqual([r["id"] for r in sock.sent], [1, 2])
+            self.assertEqual(srv._buffers[sock], b'{"id": 3')
+        finally:
+            srv.close()
+
+
+class TestLive(unittest.TestCase):
+    def setUp(self):
+        self.doc = App.newDocument("MCPTestLive")
+
+    def tearDown(self):
+        App.closeDocument(self.doc.Name)
+
+    def test_heavy_outputs_wait_for_the_pause(self):
+        from freecad_mcp import live
+
+        import Draft
+
+        line = Draft.make_line(App.Vector(0, 0, 0), App.Vector(1000, 0, 0))
+        table = self.doc.addObject("Spreadsheet::Sheet", "Tabela")
+        self.doc.recompute()
+        self.assertTrue(live.is_heavy(table))
+        self.assertFalse(live.is_heavy(line))
+        line.End = App.Vector(2000, 0, 0)
+        table.touch()
+        enabled = live.enabled
+        live.enabled = lambda: True  # as while drawing in the GUI
+        try:
+            live.recompute(self.doc)
+        finally:
+            live.enabled = enabled
+        self.assertAlmostEqual(line.Shape.Length, 2000.0)
+        self.assertIn("Touched", table.State)  # left for the pause
+        self.assertIn(self.doc.Name, live._state["docs"])
+        live._state["docs"].discard(self.doc.Name)
+        live.recompute(self.doc)  # without the GUI: everything at once
+        self.assertNotIn("Touched", table.State)
+
 
 class TestPdf(unittest.TestCase):
     @classmethod

@@ -281,9 +281,40 @@ def _signature(doc):
     return repr(sig)
 
 
+_RECOMPUTING = set()  # documents being recomputed
+_SIGNATURES = {}      # document -> signature, kept while it is being recomputed
+
+
+def begin_recompute(doc):
+    _RECOMPUTING.add(doc.Name)
+    _SIGNATURES.pop(doc.Name, None)
+
+
+def end_recompute(doc):
+    _RECOMPUTING.discard(doc.Name)
+    _SIGNATURES.pop(doc.Name, None)
+
+
+def inputs_changed(doc):
+    """A circuit was recomputed (its section is written on the plan): sign again."""
+    _SIGNATURES.pop(doc.Name, None)
+
+
+def _current_signature(doc):
+    # Every item and conduit asks for the layout while the document is recomputed; what they
+    # are drawn from does not change in between (circuits say so when they do), so it is
+    # signed once per recompute.
+    if doc.Name not in _RECOMPUTING:
+        return _signature(doc)
+    sig = _SIGNATURES.get(doc.Name)
+    if sig is None:
+        sig = _SIGNATURES[doc.Name] = _signature(doc)
+    return sig
+
+
 def layout(doc):
     key = (doc.Name, doc.Uid)
-    sig = _signature(doc)
+    sig = _current_signature(doc)
     hit = _CACHE.get(key)
     if hit is not None and hit[0] == sig:
         return hit[1]
@@ -327,5 +358,7 @@ def stale(doc):
 def forget(doc=None):
     if doc is None:
         _CACHE.clear()
+        _SIGNATURES.clear()
     else:
         _CACHE.pop((doc.Name, doc.Uid), None)
+        _SIGNATURES.pop(doc.Name, None)

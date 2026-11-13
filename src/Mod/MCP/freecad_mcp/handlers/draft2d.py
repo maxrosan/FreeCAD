@@ -10,6 +10,7 @@ import math
 
 import FreeCAD as App
 
+from .. import live
 from ..registry import CommandError, command
 from ..units import angle, color, length, point, points
 from .common import active_document, describe, get_object, recompute, settings
@@ -259,6 +260,7 @@ def draw_batch(items, layer=None, style=None, compact=True):
             created.append(_build(doc, kind, params))
         except Exception as e:
             errors.append({"index": i, "type": kind, "message": f"{type(e).__name__}: {e}"})
+        live.pulse(f"desenhando ({i + 1} de {len(items)})")
     recompute(doc)
     reply = {"created": len(created), "errors": errors}
     if compact:

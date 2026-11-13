@@ -6,6 +6,7 @@ SET(MCP_SRCS
     TestMCP.py
     README.md
     freecad_mcp/__init__.py
+    freecad_mcp/live.py
     freecad_mcp/registry.py
     freecad_mcp/server.py
     freecad_mcp/units.py

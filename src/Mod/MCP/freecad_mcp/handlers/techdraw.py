@@ -8,7 +8,7 @@ import FreeCAD as App
 from freecad_electrical import sheets
 
 from ..registry import CommandError, command
-from .common import SETTINGS_NAME, active_document, get_object, settings
+from .common import SETTINGS_NAME, active_document, get_object, recompute, settings
 
 
 @command("create_sheet", transaction=True)
@@ -126,6 +126,7 @@ def export_model(path, objects=None):
     import importlib
 
     doc = active_document(create=False)
+    recompute(doc, full=True)
     objs = [get_object(doc, n) for n in objects] if objects else [
         o for o in doc.Objects if o.Name != SETTINGS_NAME and not o.TypeId.startswith("TechDraw::")]
     path = os.path.abspath(path)

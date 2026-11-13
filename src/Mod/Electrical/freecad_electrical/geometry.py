@@ -41,6 +41,9 @@ class Frame:
     def direction(self):
         return self.rot.multVec(App.Vector(1, 0, 0))
 
+    def key(self):
+        return (tuple(round(v, 6) for v in self.origin), round(self.rotation, 6), round(self.scale, 6))
+
 
 # --- texts --------------------------------------------------------------------------------------
 

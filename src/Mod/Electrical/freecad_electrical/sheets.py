@@ -658,9 +658,13 @@ class _Observer:
 
     def __init__(self):
         self.pending = set()
+        self.held = set()  # documents waiting for release_updates()
 
     def _schedule(self, doc):
         if not App.GuiUp or doc is None or doc.Name in self.pending:
+            return
+        if _holds:
+            self.held.add(doc.Name)
             return
         from PySide import QtCore
 
@@ -671,6 +675,9 @@ class _Observer:
         self.pending.discard(name)
         doc = App.listDocuments().get(name)
         if doc is None:
+            return
+        if _holds:
+            self.held.add(name)  # someone is drawing: refresh once they pause
             return
         if getattr(doc, "Restoring", False):
             self._schedule(doc)  # still loading: try again once it is open
@@ -711,6 +718,30 @@ class _Observer:
 
 
 _observer = None
+_holds = 0
+
+
+def hold_updates():
+    """Leave the sheet refresh (a full recompute) for later: the MCP holds it while the assistant
+    draws, so each item shows at once, and releases it when the assistant pauses."""
+    global _holds
+    _holds += 1
+
+
+def updates_held():
+    return _holds > 0
+
+
+def release_updates():
+    global _holds
+    _holds = max(0, _holds - 1)
+    if _holds or _observer is None:
+        return
+    names, _observer.held = _observer.held, set()
+    for name in sorted(names):
+        doc = App.listDocuments().get(name)
+        if doc is not None:
+            _observer._schedule(doc)
 
 
 def install_observer():
