@@ -204,8 +204,28 @@ def extent(objs):
     return box
 
 
+DOCUMENT_TYPE = "Projeto de instalações elétricas"
+# Field names of the ISO 5457 title block and their Portuguese (Brazilian practice) captions.
+PT_CAPTIONS = {
+    "Title:": "Título:",
+    "Created by:": "Responsável técnico:",
+    "Approved by:": "Aprovado por:",
+    "Document type:": "Tipo de documento:",
+    "Drawing number:": "Prancha nº:",
+    "Issue date:": "Data:",
+    "Language:": "Idioma:",
+    "Owner:": "Proprietário:",
+    "Part Material:": "Obra:",
+    "General tolerances:": "Local:",
+    "Revision:": "Revisão:",
+    "Scale:": "Escala:",
+    "Sheet:": "Folha:",
+}
+
+
 def fill_title_block(template, title, scale_text, sheet_text="1 / 1"):
-    """Fill title, scale and date; blank the sample texts the template ships with."""
+    """Fill title, scale, date, document type and language; blank the sample texts the template
+    ships with."""
     try:
         texts = dict(template.EditableTexts)
     except Exception:
@@ -220,9 +240,37 @@ def fill_title_block(template, title, scale_text, sheet_text="1 / 1"):
             texts[key] = datetime.date.today().strftime("%d/%m/%Y")
         elif "sheet" in low:
             texts[key] = sheet_text
+        elif "document_type" in low:
+            texts[key] = DOCUMENT_TYPE
+        elif "language" in low:
+            texts[key] = "PT-BR"
         else:
             texts[key] = ""
     template.EditableTexts = texts
+
+
+def template_pt(template_file):
+    """The ISO template with its captions in Portuguese: a copy in the user data folder, written
+    again when the original changes. Falls back to the original if it cannot be written."""
+    src = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", template_file)
+    folder = os.path.join(App.getUserAppDataDir(), "Electrical", "templates")
+    dst = os.path.join(folder, os.path.basename(template_file).replace(".svg", "_pt.svg"))
+    try:
+        with open(src, encoding="utf-8") as f:
+            text = f.read()
+        for en, pt in PT_CAPTIONS.items():
+            text = text.replace(f">{en}<", f">{pt}<")
+        old = None
+        if os.path.exists(dst):
+            with open(dst, encoding="utf-8") as f:
+                old = f.read()
+        if old != text:
+            os.makedirs(folder, exist_ok=True)
+            with open(dst, "w", encoding="utf-8") as f:
+                f.write(text)
+        return dst
+    except OSError:
+        return src
 
 
 def _page(doc, name, label, sheet):
@@ -230,10 +278,196 @@ def _page(doc, name, label, sheet):
     page = doc.addObject("TechDraw::DrawPage", name)
     page.Label = label
     template = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
-    template.Template = os.path.join(App.getResourceDir(), "Mod", "TechDraw", "Templates", template_file)
+    template.Template = template_pt(template_file)
     page.Template = template
     page.KeepUpdated = True
     return page, template, size
+
+
+# ------------------------------------------------------------------------------- windows on plans
+WINDOW_MARK = "JanelaPlanta"  # property that marks (and links) the plan symbol of a window
+
+
+def _is_window(obj):
+    return obj.TypeId == "Part::FeaturePython" and "Hosts" in obj.PropertiesList \
+        and getattr(obj, "IfcType", "") == "Window" and obj.Hosts
+
+
+def window_marks(doc):
+    """Plan symbol of every window: a white band across its host wall, over the opening, with two
+    lines for the glass. The plan draws the walls from above, where the wall over the window hides
+    the opening; doors already draw their swing. Updated on each call: a window keeps its mark
+    (sheets already drawing it keep it), marks of removed windows go. Only windows in walls along X
+    or Y are drawn. Returns the marks."""
+    import Part
+
+    existing = {}
+    for old in [o for o in doc.Objects if WINDOW_MARK in o.PropertiesList]:
+        win = getattr(old, WINDOW_MARK, None)
+        if win is not None and win.Name not in existing:
+            existing[win.Name] = old
+        else:
+            doc.removeObject(old.Name)
+    marks = []
+    for win in [o for o in doc.Objects if _is_window(o)]:
+        shape = getattr(win, "Shape", None)
+        if shape is None or shape.isNull():
+            continue
+        box = shape.BoundBox
+        thick = getattr(win.Hosts[0], "Width", None)
+        thick = float(getattr(thick, "Value", thick or 0.0))
+        if thick <= 0:
+            continue
+        z = (getattr(win.Hosts[0], "Shape", None) or shape).BoundBox.ZMin + 50.0  # inside the wall, under the sill
+        if box.XLength >= box.YLength:  # wall along X
+            c, h = box.Center.y, thick / 2
+            def pt(a, b): return App.Vector(a, c + b, z)
+            a0, a1 = box.XMin, box.XMax
+        else:  # wall along Y
+            c, h = box.Center.x, thick / 2
+            def pt(a, b): return App.Vector(c + b, a, z)
+            a0, a1 = box.YMin, box.YMax
+        if a1 - a0 < 1.0:
+            continue
+        band = Part.Face(Part.makePolygon([pt(a0, -h), pt(a1, -h), pt(a1, h), pt(a0, h), pt(a0, -h)]))
+        glass = [Part.LineSegment(pt(a0, d), pt(a1, d)).toShape() for d in (-0.15 * thick, 0.15 * thick)]
+        mark = existing.pop(win.Name, None)
+        if mark is None:
+            mark = doc.addObject("Part::Feature", "JanelaPlanta")
+            mark.addProperty("App::PropertyLink", WINDOW_MARK, "Planta", "Janela representada")
+            setattr(mark, WINDOW_MARK, win)
+        mark.Shape = Part.makeCompound([band] + glass)
+        mark.Label = f"Janela (planta) - {win.Label}"
+        if App.GuiUp and mark.ViewObject is not None:
+            mark.ViewObject.ShapeColor = (1.0, 1.0, 1.0)
+            mark.ViewObject.LineColor = (0.0, 0.0, 0.0)
+        marks.append(mark)
+    for orphan in existing.values():
+        doc.removeObject(orphan.Name)
+    return marks
+
+
+# ------------------------------------------------------------------------------- legend
+LEGEND_TEXT = 2.5  # paper mm
+LEGEND_ROW = 7.0
+
+
+def _legend_prims(svg, prims, x, y):
+    """Lines and fills of a symbol (texts left out) with its origin at page point (x, y); symbol
+    coordinates are paper mm with y up."""
+    for prim in prims:
+        kind = prim[0]
+        if kind == "line":
+            (ax, ay), (bx, by) = prim[1], prim[2]
+            svg.append(f'<line x1="{x + ax:.2f}" y1="{y - ay:.2f}" x2="{x + bx:.2f}" y2="{y - by:.2f}" '
+                       f'stroke="black" stroke-width="0.25"/>')
+        elif kind == "poly":
+            d = " ".join(f"{x + px:.2f},{y - py:.2f}" for px, py in prim[1])
+            tag = "polygon" if prim[2] else "polyline"
+            fill = "black" if prim[3] else "none"
+            svg.append(f'<{tag} points="{d}" fill="{fill}" stroke="black" stroke-width="0.25"/>')
+        elif kind == "circle":
+            (cx, cy), r = prim[1], prim[2]
+            fill = "black" if prim[3] else "none"
+            svg.append(f'<circle cx="{x + cx:.2f}" cy="{y - cy:.2f}" r="{r:.2f}" fill="{fill}" '
+                       f'stroke="black" stroke-width="0.25"/>')
+
+
+def legend_rows(doc):
+    """[(kind, key, description)] of what the plan of `doc` uses: symbols, conductor marks and
+    conduit installations, in the order of the symbol table."""
+    from .symbols import CONDUCTORS, SYMBOLS
+
+    used = {p.Symbol for p in model.points(doc)}
+    rows = [("symbol", key, sym.label) for key, sym in SYMBOLS.items() if key in used]
+    conduits = model.items(doc, model.T_CONDUIT)
+    installs = {getattr(c, "Installation", "teto") for c in conduits}
+    names = {"teto": "Eletroduto embutido no teto ou na parede", "parede": None,
+             "piso": "Eletroduto embutido no piso", "enterrado": "Eletroduto enterrado"}
+    for inst in ("teto", "piso", "enterrado"):
+        if inst in installs or (inst == "teto" and "parede" in installs):
+            rows.append(("conduit", inst, names[inst]))
+    if conduits:
+        captions = {"fase": "Condutor fase", "neutro": "Condutor neutro", "retorno": "Condutor retorno",
+                    "terra": "Condutor de proteção (terra)"}
+        rows += [("conductor", k, captions[k]) for k in ("fase", "neutro", "retorno", "terra") if k in CONDUCTORS]
+    return rows
+
+
+def legend_svg(doc):
+    """(svg, width, height) of the legend of the plan: one row per symbol, conduit and conductor
+    mark in use, drawn as on the plan, and a line on the texts beside the symbols."""
+    from xml.sax.saxutils import escape
+
+    from .symbols import CONDUCTORS, SYMBOLS
+
+    rows = legend_rows(doc)
+    if not rows:
+        return None, 0.0, 0.0
+    notes = ["Junto aos símbolos: potência, -nº do circuito- e",
+             "letra do comando (interruptor e ponto de luz)."]
+    longest = max([len(r[2]) for r in rows] + [len(n) for n in notes])
+    width = 24.0 + longest * LEGEND_TEXT * 0.52 + 4.0
+    height = 10.0 + LEGEND_ROW * len(rows) + 4.0 + LEGEND_TEXT * 1.4 * len(notes) + 3.0
+    svg = [f'<rect x="0.5" y="0.5" width="{width - 1:.2f}" height="{height - 1:.2f}" fill="white" '
+           f'stroke="black" stroke-width="0.35"/>',
+           f'<text x="{width / 2:.2f}" y="7" font-family="osifont" font-size="3.5" text-anchor="middle" '
+           f'font-weight="bold" fill="black">LEGENDA</text>']
+    y = 10.0 + LEGEND_ROW / 2
+    for kind, key, caption in rows:
+        if kind == "symbol":
+            prims = SYMBOLS[key].build({})
+            xs = [q[0] for p in prims if p[0] == "poly" for q in p[1]] + \
+                 [v for p in prims if p[0] == "line" for v in (p[1][0], p[2][0])] + \
+                 [p[1][0] + s * p[2] for p in prims if p[0] == "circle" for s in (-1, 1)]
+            cx = 12.0 - ((min(xs) + max(xs)) / 2 if xs else 0.0)
+            _legend_prims(svg, prims, cx, y)
+            if key.startswith("interruptor"):
+                svg.append(f'<text x="{cx + 2.0:.2f}" y="{y - 1.4:.2f}" font-family="osifont" font-size="2" '
+                           f'fill="black">a</text>')
+        elif kind == "conduit":
+            dash = {"teto": "", "piso": ' stroke-dasharray="2,1"', "enterrado": ' stroke-dasharray="4,0.8,0.4,0.8"'}[key]
+            svg.append(f'<line x1="4" y1="{y:.2f}" x2="20" y2="{y:.2f}" stroke="black" stroke-width="0.35"{dash}/>')
+        else:
+            svg.append(f'<line x1="4" y1="{y:.2f}" x2="20" y2="{y:.2f}" stroke="black" stroke-width="0.35"/>')
+            _legend_prims(svg, CONDUCTORS[key], 12.0, y)
+        svg.append(f'<text x="24" y="{y + LEGEND_TEXT * 0.35:.2f}" font-family="osifont" '
+                   f'font-size="{LEGEND_TEXT}" fill="black">{escape(caption)}</text>')
+        y += LEGEND_ROW
+    y += 1.0
+    for line in notes:
+        y += LEGEND_TEXT * 1.4
+        svg.append(f'<text x="4" y="{y:.2f}" font-family="osifont" font-size="{LEGEND_TEXT}" '
+                   f'fill="black">{escape(line)}</text>')
+    body = "\n".join(svg)
+    text = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.1f}mm" height="{height:.1f}mm" '
+            f'viewBox="0 0 {width:.1f} {height:.1f}">\n{body}\n</svg>')
+    return text, width, height
+
+
+def add_legend(doc, page, plan_view=None):
+    """The legend at the top right of the drawing area; the plan moves left to make room when it
+    fits there. Returns the legend view (None when the plan uses no symbol)."""
+    svg, width, height = legend_svg(doc)
+    if not svg:
+        return None
+    view = doc.addObject("TechDraw::DrawViewSymbol", "Legenda")
+    view.Label = "Legenda"
+    page.addView(view)
+    view.Symbol = svg
+    view.ScaleType = "Custom"
+    view.Scale = 1.0
+    size = page.Template.Width.Value, page.Template.Height.Value
+    x0, y0, x1, y1 = drawing_area(size)
+    view.X, view.Y = x1 - width / 2 - 2.0, y1 - height / 2 - 2.0
+    if plan_view is not None:
+        source = getattr(plan_view, "Source", None)
+        box = extent(list(getattr(source, "ElementList", []) or [])) if source is not None else None
+        free = x1 - width - 6.0
+        if box is not None and box.XLength * plan_view.Scale <= free - x0:
+            plan_view.X = (x0 + free) / 2
+    doc.recompute()
+    return view
 
 
 def _content_sources(doc, content):
@@ -283,6 +517,8 @@ def _migrate_link_groups(doc):
 def make_sheet(doc, sheet="auto", scale=None, objs=None, title=None, line_width=0.35, text_height=2.5, floor=None):
     """A page with the drawing at 1:scale, kept up to date. `floor` (zmin, zmax) limits it to one
     floor. Returns (page, view, sheet, scale, box)."""
+    if objs is None:
+        window_marks(doc)
     if objs is not None:
         content_objs = objs
     elif floor is not None:
@@ -524,18 +760,23 @@ def make_electrical_sheets(doc, title=None, sheet="auto", scale=None, schedule=T
     when items are on several floors), the load schedule, the single-line diagram and the bill of
     materials. Returns [(kind, page)]."""
     title = title or doc.Label
-    pages = []
+    pages, plans = [], []
     ranges = floor_ranges(doc)
     if ranges:
         for name, zmin, zmax in ranges:
             if not floor_sources(doc, zmin, zmax):
                 continue
-            page = make_sheet(doc, sheet, scale, title=f"{title} - planta elétrica - {name}", floor=(zmin, zmax))[0]
+            page, view = make_sheet(doc, sheet, scale, title=f"{title} - planta elétrica - {name}",
+                                    floor=(zmin, zmax))[:2]
             pages.append(("planta", page))
+            plans.append((page, view))
     else:
-        pages.append(("planta", make_sheet(doc, sheet, scale, title=f"{title} - planta elétrica")[0]))
-    for kind, page in pages:
+        page, view = make_sheet(doc, sheet, scale, title=f"{title} - planta elétrica")[:2]
+        pages.append(("planta", page))
+        plans.append((page, view))
+    for page, view in plans:
         add_notes(doc, page, plan_notes())
+        add_legend(doc, page, view)
     if schedule:
         pages.append(("quadro_de_cargas", make_schedule_page(doc)[0]))
     if diagram:

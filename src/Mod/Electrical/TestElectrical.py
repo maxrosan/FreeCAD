@@ -487,8 +487,15 @@ class TestOutputs(unittest.TestCase):
         self.doc.recompute()
         pages = sheets.make_electrical_sheets(self.doc)
         self.assertEqual([k for k, _ in pages], ["planta", "quadro_de_cargas", "unifilar", "materiais", "3d"])
-        view = [o for o in self.doc.Objects if o.TypeId == "TechDraw::DrawViewSymbol"][0]
+        view = self.doc.getObject("VistaUnifilar")
         self.assertIn("QUADRO QD1", view.Symbol)
+        legend = self.doc.getObject("Legenda")
+        self.assertIn("LEGENDA", legend.Symbol)
+        self.assertIn("Tomada na parede, baixa", legend.Symbol)
+        plan = pages[0][1]
+        with open(plan.Template.Template, encoding="utf-8") as f:
+            self.assertIn(">Título:<", f.read())
+        self.assertEqual(plan.Template.EditableTexts.get("document_type"), sheets.DOCUMENT_TYPE)
         model.make_point(self.doc, "tomada_baixa", App.Vector(0, 2000, 0), 0, circuit=7, label="Tomada nova")
         self.doc.recompute()
         self.assertIn(">7<", view.Symbol)  # the new circuit is on the diagram
