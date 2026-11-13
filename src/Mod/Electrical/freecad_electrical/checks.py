@@ -76,6 +76,46 @@ def indoor_floor_conduits(doc, room_list=None):
     return found
 
 
+WALL_PROBE_MM = 30.0  # how far into the wall, behind a wall item, the wall must be
+
+
+def items_in_openings(doc):
+    """Wall items (sockets, switches, wall lights, panels) with no wall behind them at their
+    mounting height: placed in a door or window opening. Returns [(item, what)], `what` being
+    the opening's label (or the wall's when the opening is not found)."""
+    holes = []  # (opening, the void it cuts in its wall)
+    for o in doc.Objects:
+        if getattr(o, "IfcType", "") not in ("Door", "Window") or not getattr(o, "Hosts", None):
+            continue
+        try:
+            void = o.Proxy.getSubVolume(o)
+        except Exception:
+            void = None
+        if void is not None and not void.isNull():
+            holes.append((o, void))
+    if not holes:
+        return []
+    found = []
+    scale = model.scale_of(doc)
+    for p in model.points(doc):
+        symbol = SYMBOLS.get(p.Symbol)
+        if symbol is None or not (symbol.wall or symbol.beside):
+            continue
+        angle = float(getattr(p.Rotation, "Value", p.Rotation))
+        into_room = App.Rotation(App.Vector(0, 0, 1), angle).multVec(App.Vector(1, 0, 0))
+        z = p.Position.z + float(getattr(p.Height, "Value", p.Height))
+        # switches and the like are drawn beside the wall: it may be up to `beside` behind them
+        behind = WALL_PROBE_MM if symbol.wall else symbol.beside * scale + WALL_PROBE_MM
+        probe = App.Vector(p.Position.x, p.Position.y, z) - into_room * behind
+        for opening, void in holes:
+            box = void.BoundBox
+            box.enlarge(1.0)
+            if box.isInside(probe) and void.isInside(probe, 1.0, True):
+                found.append((p, opening.Label))
+                break
+    return found
+
+
 def check(doc):
     doc.recompute()
     report = {"system": model.system_of(doc), "circuits": [], "rooms": [], "warnings": [],
@@ -110,6 +150,9 @@ def check(doc):
     for c, room in indoor_floor_conduits(doc, room_list):
         report["warnings"].append(f"{c.Label}: eletroduto no piso dentro de {room} (sob a cerâmica); "
                                   "em área interna prefira descer pela parede a partir do forro")
+    for p, opening in items_in_openings(doc):
+        report["warnings"].append(f"{p.Label}: no vão de {opening}, sem parede atrás na altura de "
+                                  f"{float(getattr(p.Height, 'Value', p.Height)):.0f} mm; mude de lugar")
     by_room = {id(r): [] for r in room_list}
     for p in model.points(doc):
         room = room_of(p, room_list)

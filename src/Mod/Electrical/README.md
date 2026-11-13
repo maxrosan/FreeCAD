@@ -35,7 +35,8 @@ Building electrical plans in FreeCAD, Brazilian conventions:
 * **Checks** (NBR 5410): lighting VA and number/VA of sockets per room (BIM spaces of each floor),
   circuit protection, conductors and voltage drop, RCDs, phase balance, items no conduit reaches,
   floor conduits inside a room (under the ceramic: indoors they go down the wall from the forro;
-  floor and buried runs are for outdoor areas).
+  floor and buried runs are for outdoor areas), wall items (sockets, switches) placed in a door
+  or window opening, with no wall behind them at their height.
   Estimates for review, not a design approval.
 * **Sheets that stay up to date**: one plan page per floor (or one for the whole document), and
   pages for the schedule, the single-line diagram and the materials. Plans cut the building at

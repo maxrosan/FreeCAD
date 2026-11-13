@@ -640,8 +640,10 @@ def rebalance_phases(panel: str | None = None) -> dict:
 @tool()
 def check_installation() -> dict:
     """NBR 5410 checks: lighting VA and sockets per room (BIM spaces, per floor), circuit protection,
-    conductors with correction factors, voltage drop, RCDs, phase balance, items without a conduit, and
-    the service entrances. Estimates for review, not a design approval."""
+    conductors with correction factors, voltage drop, RCDs, phase balance, items without a conduit,
+    floor conduits indoors, sockets and switches placed in a door or window opening, and the service
+    entrances. Estimates for review, not a design approval. Run it after placing items and fix what it
+    reports before drawing sheets."""
     return fc("check_installation")
 
 

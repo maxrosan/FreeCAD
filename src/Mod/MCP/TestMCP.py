@@ -172,6 +172,22 @@ class TestBim(unittest.TestCase):
         self.assertIsNone(view._cut_height(self.doc, False, "top"))
         self.assertEqual(view._cut_height(self.doc, 2400, "iso"), 2400)
 
+        # Wall items with no wall behind them, at their height, are in an opening.
+        from freecad_electrical import checks
+
+        def item(symbol, x):
+            return call("insert_electrical_symbol", symbol=symbol, position=[x, 75], rotation=90)["name"]
+
+        in_door = item("tomada_baixa", 1400)           # door 1000-1800
+        beside = item("tomada_baixa", 2200)
+        under_window = item("tomada_baixa", 3000)      # window 2500-3700, sill at 1000
+        in_window = item("interruptor_simples", 3000)  # at 1300 mm, in the window
+        flagged = {p.Name: what for p, what in checks.items_in_openings(self.doc)}
+        self.assertEqual(set(flagged), {in_door, in_window})
+        self.assertNotIn(beside, flagged)
+        self.assertNotIn(under_window, flagged)
+        self.assertTrue(any("no vão de" in w for w in checks.check(self.doc)["warnings"]))
+
     def test_aligned_and_vertical_walls(self):
         wall = call("make_wall", start=[0, 0], end=[0, 5000], width=200, height=3000, align="Left")
         door = call("add_opening", wall=wall["name"], position=2000, width=900)
