@@ -262,10 +262,23 @@ def set_drawing_scale(denominator: float) -> dict:
 @tool()
 def get_screenshot(direction: Literal["top", "bottom", "front", "rear", "left", "right", "iso",
                                       "axonometric", "current"] = "top",
-                   width: int = 1600, height: int = 1200, fit: bool = True) -> Image:
-    """Image of the FreeCAD 3D view (top view by default, zoomed to fit), to compare with the source."""
-    result = fc("get_screenshot", direction=direction, width=width, height=height, fit=fit)
+                   width: int = 1600, height: int = 1200, fit: bool = True,
+                   cut: bool | float | None = None) -> Image:
+    """Image of the FreeCAD 3D view (top view by default, zoomed to fit), to compare with the source.
+    cut: plan cut (walls cut at 1,5 m above the floor, showing door and window openings, as a floor
+    plan): default on for the top view of a building; False for the roofline seen from above, or a
+    height in mm."""
+    result = fc("get_screenshot", direction=direction, width=width, height=height, fit=fit, cut=cut)
     return Image(path=result["path"])
+
+
+@tool()
+def set_view(direction: Literal["top", "bottom", "front", "rear", "left", "right", "iso",
+                                "axonometric", "current"] = "top",
+             fit: bool = True, cut: bool | float | None = None) -> dict:
+    """Turn the camera of the person's 3D view (they watch it while you draw). cut: as in
+    get_screenshot - the top view of a building shows the plan cut at 1,5 m."""
+    return fc("set_view", direction=direction, fit=fit, cut=cut)
 
 
 @tool()

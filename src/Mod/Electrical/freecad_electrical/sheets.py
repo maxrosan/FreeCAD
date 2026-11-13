@@ -71,7 +71,28 @@ class SheetContent:
         obj.addProperty("App::PropertyBool", AUTO, "Folha", "Acompanhar os objetos do documento")
 
     def svg_group(self, obj):
-        return list(obj.ElementList)
+        """What the sheet draws, out of their groups, levels and layers: walls, columns, doors
+        and windows give way to the plan cut (plan_cut), which draws them cut as a floor plan."""
+        out, seen = [], set()
+        has_cut = any(PLAN_CUT in o.PropertiesList for o in obj.Document.Objects)
+
+        def add(o):
+            if o is None or o.Name in seen:
+                return
+            seen.add(o.Name)
+            members = getattr(o, "Group", None)
+            if members is not None and (o.isDerivedFrom("App::DocumentObjectGroup")
+                                        or _type(o) in ("Layer", "BuildingPart")):
+                for member in members:
+                    add(member)
+                return
+            if has_cut and is_cut(o):
+                return
+            out.append(o)
+
+        for o in obj.ElementList:
+            add(o)
+        return out
 
     def execute(self, obj):
         pass
@@ -284,67 +305,157 @@ def _page(doc, name, label, sheet):
     return page, template, size
 
 
-# ------------------------------------------------------------------------------- windows on plans
-WINDOW_MARK = "JanelaPlanta"  # property that marks (and links) the plan symbol of a window
+# ------------------------------------------------------------------------------- plan cut
+CUT_HEIGHT = 1500.0  # mm above the floor where a floor plan cuts walls, doors and windows
+CUT_TYPES = ("Wall", "Column", "Window", "Door")
+PLAN_CUT = "PlantaCorte"  # property of the plan cut helpers: what they draw (CUT_PARTS)
+CUT_PARTS = {
+    # kind: (label, line style); walls are filled, openings and swings are lines
+    "paredes": ("Planta - paredes cortadas", "Solid"),
+    "aberturas": ("Planta - portas e janelas", "Solid"),
+    "giros": ("Planta - giro das portas", "Dashed"),
+}
+OLD_WINDOW_MARK = "JanelaPlanta"  # window marks of older files, replaced by the plan cut
+_CUT_SIGNATURES = {}  # document -> signature of what its plan cut was built from
 
 
-def _is_window(obj):
-    return obj.TypeId == "Part::FeaturePython" and "Hosts" in obj.PropertiesList \
-        and getattr(obj, "IfcType", "") == "Window" and obj.Hosts
+def is_cut(obj):
+    """A wall, column, door or window: the plan draws it cut at CUT_HEIGHT, as a floor plan
+    does, instead of seen from above (where the wall over a door or window hides the opening)."""
+    if obj.TypeId != "Part::FeaturePython" or getattr(obj, "IfcType", "") not in CUT_TYPES:
+        return False
+    shape = getattr(obj, "Shape", None)
+    return shape is not None and not shape.isNull()
+
+
+def _floor_of(obj):
+    """Base of the floor an object stands on: its own, or its host wall's (a window starts at
+    its sill)."""
+    hosts = getattr(obj, "Hosts", None) or []
+    host = hosts[0] if hosts else None
+    base = host if host is not None and getattr(host, "Shape", None) is not None \
+        and not host.Shape.isNull() else obj
+    return base.Shape.BoundBox.ZMin
+
+
+def _cut_floors(objs):
+    """[(floor z, [objects])]: objects whose floors are closer than FLOOR_TOLERANCE together."""
+    floors = []
+    for z, obj in sorted(((_floor_of(o), o) for o in objs), key=lambda t: t[0]):
+        if floors and z - floors[-1][0] < model.FLOOR_TOLERANCE:
+            floors[-1][1].append(obj)
+        else:
+            floors.append((z, [obj]))
+    return floors
+
+
+def _loose_edges(shape):
+    """Edges outside the solids of a shape: the plan symbol of a door (open leaf and swing)."""
+    inside = {e.hashCode() for solid in shape.Solids for e in solid.Edges}
+    return [e for e in shape.Edges if e.hashCode() not in inside]
+
+
+def _cut_shapes(z0, objs):
+    """{kind: [shapes]} of one floor, moved down to just above the floor (z0 + 1), where the
+    walls hide them in the 3D view and the floor's sheet finds them."""
+    import Part
+
+    up = App.Vector(0, 0, 1)
+    parts = {kind: [] for kind in CUT_PARTS}
+
+    def down(shape, z):
+        shape = shape.copy()
+        shape.translate(App.Vector(0, 0, z0 + 1.0 - z))
+        return shape
+
+    for obj in objs:
+        box = obj.Shape.BoundBox
+        # through the object: high windows (above the cut) and low walls are cut at their middle
+        z = min(max(z0 + CUT_HEIGHT, box.ZMin + 1.0), box.ZMax - 1.0)
+        try:
+            wires = obj.Shape.slice(up, z)
+        except Exception:
+            wires = []
+        if getattr(obj, "IfcType", "") in ("Wall", "Column"):
+            if wires:
+                try:
+                    face = Part.makeFace(wires, "Part::FaceMakerBullseye")
+                    parts["paredes"].append(down(face, z))
+                except Exception as e:
+                    App.Console.PrintLog(f"Elétrica: corte de {obj.Label}: {e}\n")
+            continue
+        parts["aberturas"] += [down(w, z) for w in wires]
+        for edge in _loose_edges(obj.Shape):
+            kind = "giros" if isinstance(edge.Curve, (Part.Circle, Part.ArcOfCircle)) else "aberturas"
+            parts[kind].append(down(edge, edge.BoundBox.ZMin))
+    return parts
+
+
+def _cut_signature(objs):
+    sig = []
+    for o in objs:
+        box = o.Shape.BoundBox
+        sig.append((o.Name, round(o.Shape.Volume, 1), len(o.Shape.Edges),
+                    tuple(round(v, 1) for v in (box.XMin, box.YMin, box.ZMin, box.XMax, box.YMax, box.ZMax))))
+    return tuple(sig)
+
+
+def plan_cut(doc, force=False):
+    """Update the plan cut of `doc`: per floor, the walls and columns cut at CUT_HEIGHT (filled),
+    the doors and windows cut there (frames, leaves, glass) and the door swings (dashed). Sheets
+    draw these instead of the walls, doors and windows themselves. Rebuilt only when those
+    changed (or `force`). Returns True if something changed."""
+    import Part
+
+    changed = False
+    for old in [o for o in doc.Objects if OLD_WINDOW_MARK in o.PropertiesList]:
+        doc.removeObject(old.Name)
+        changed = True
+    objs = [o for o in doc.Objects if is_cut(o)]
+    sig = _cut_signature(objs)
+    key = (doc.Name, doc.Uid)
+    existing = {}
+    for helper in [o for o in doc.Objects if PLAN_CUT in o.PropertiesList]:
+        existing.setdefault((helper.PlantaCorte, round(helper.PlantaPiso)), []).append(helper)
+    if not force and not changed and _CUT_SIGNATURES.get(key) == sig and existing:
+        return False
+    _CUT_SIGNATURES[key] = sig
+    keep = set()
+    for z0, members in _cut_floors(objs):
+        for kind, shapes in _cut_shapes(z0, members).items():
+            if not shapes:
+                continue
+            found = existing.get((kind, round(z0)), [])
+            helper = found[0] if found else None
+            if helper is None:
+                helper = doc.addObject("Part::Feature", "PlantaCorte")
+                helper.addProperty("App::PropertyString", PLAN_CUT, "Planta", "O que este corte desenha")
+                helper.addProperty("App::PropertyFloat", "PlantaPiso", "Planta", "Cota do piso (mm)")
+                setattr(helper, PLAN_CUT, kind)
+                helper.PlantaPiso = z0
+                label, style = CUT_PARTS[kind]
+                helper.Label = label if abs(z0) < 1 else f"{label} ({z0 / 1000:+.2f} m)".replace(".", ",")
+                if App.GuiUp and helper.ViewObject is not None:
+                    vobj = helper.ViewObject
+                    vobj.LineColor = (0.0, 0.0, 0.0)
+                    vobj.ShapeColor = (0.82, 0.82, 0.82)
+                    vobj.DrawStyle = style
+                    vobj.LineWidth = 2.0 if kind == "paredes" else 1.0
+            helper.Shape = Part.makeCompound(shapes)
+            keep.add(helper.Name)
+            changed = True
+    for helpers in existing.values():
+        for helper in helpers:
+            if helper.Name not in keep:
+                doc.removeObject(helper.Name)
+                changed = True
+    return changed
 
 
 def window_marks(doc):
-    """Plan symbol of every window: a white band across its host wall, over the opening, with two
-    lines for the glass. The plan draws the walls from above, where the wall over the window hides
-    the opening; doors already draw their swing. Updated on each call: a window keeps its mark
-    (sheets already drawing it keep it), marks of removed windows go. Only windows in walls along X
-    or Y are drawn. Returns the marks."""
-    import Part
-
-    existing = {}
-    for old in [o for o in doc.Objects if WINDOW_MARK in o.PropertiesList]:
-        win = getattr(old, WINDOW_MARK, None)
-        if win is not None and win.Name not in existing:
-            existing[win.Name] = old
-        else:
-            doc.removeObject(old.Name)
-    marks = []
-    for win in [o for o in doc.Objects if _is_window(o)]:
-        shape = getattr(win, "Shape", None)
-        if shape is None or shape.isNull():
-            continue
-        box = shape.BoundBox
-        thick = getattr(win.Hosts[0], "Width", None)
-        thick = float(getattr(thick, "Value", thick or 0.0))
-        if thick <= 0:
-            continue
-        z = (getattr(win.Hosts[0], "Shape", None) or shape).BoundBox.ZMin + 50.0  # inside the wall, under the sill
-        if box.XLength >= box.YLength:  # wall along X
-            c, h = box.Center.y, thick / 2
-            def pt(a, b): return App.Vector(a, c + b, z)
-            a0, a1 = box.XMin, box.XMax
-        else:  # wall along Y
-            c, h = box.Center.x, thick / 2
-            def pt(a, b): return App.Vector(c + b, a, z)
-            a0, a1 = box.YMin, box.YMax
-        if a1 - a0 < 1.0:
-            continue
-        band = Part.Face(Part.makePolygon([pt(a0, -h), pt(a1, -h), pt(a1, h), pt(a0, h), pt(a0, -h)]))
-        glass = [Part.LineSegment(pt(a0, d), pt(a1, d)).toShape() for d in (-0.15 * thick, 0.15 * thick)]
-        mark = existing.pop(win.Name, None)
-        if mark is None:
-            mark = doc.addObject("Part::Feature", "JanelaPlanta")
-            mark.addProperty("App::PropertyLink", WINDOW_MARK, "Planta", "Janela representada")
-            setattr(mark, WINDOW_MARK, win)
-        mark.Shape = Part.makeCompound([band] + glass)
-        mark.Label = f"Janela (planta) - {win.Label}"
-        if App.GuiUp and mark.ViewObject is not None:
-            mark.ViewObject.ShapeColor = (1.0, 1.0, 1.0)
-            mark.ViewObject.LineColor = (0.0, 0.0, 0.0)
-        marks.append(mark)
-    for orphan in existing.values():
-        doc.removeObject(orphan.Name)
-    return marks
+    """Older name of plan_cut (sheets made before the plan cut drew only window marks)."""
+    plan_cut(doc, force=True)
+    return [o for o in doc.Objects if PLAN_CUT in o.PropertiesList]
 
 
 # ------------------------------------------------------------------------------- legend
@@ -518,7 +629,7 @@ def make_sheet(doc, sheet="auto", scale=None, objs=None, title=None, line_width=
     """A page with the drawing at 1:scale, kept up to date. `floor` (zmin, zmax) limits it to one
     floor. Returns (page, view, sheet, scale, box)."""
     if objs is None:
-        window_marks(doc)
+        plan_cut(doc, force=True)
     if objs is not None:
         content_objs = objs
     elif floor is not None:
@@ -643,6 +754,9 @@ def sync(doc):
         if source is not None and getattr(source, AUTO, None) is not None and view.LineSpacing < spacing - 1e-6:
             view.LineSpacing = spacing
             changed = True
+    if any(_type(o) == "SheetContent" and getattr(o, AUTO, False) for o in doc.Objects):
+        # walls, doors or windows moved, added or removed: cut the plan again
+        changed = plan_cut(doc) or changed
     for obj in doc.Objects:
         if _type(obj) == "SheetContent" and getattr(obj, AUTO, False):
             current = _content_sources(doc, obj)

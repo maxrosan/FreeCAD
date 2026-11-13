@@ -38,7 +38,11 @@ Building electrical plans in FreeCAD, Brazilian conventions:
   floor and buried runs are for outdoor areas).
   Estimates for review, not a design approval.
 * **Sheets that stay up to date**: one plan page per floor (or one for the whole document), and
-  pages for the schedule, the single-line diagram and the materials.
+  pages for the schedule, the single-line diagram and the materials. Plans cut the building at
+  1,5 m above each floor, as floor plans do: walls and columns are drawn cut (filled), broken at
+  doors and windows; doors show their frame, the leaf open at 90° and the swing (dashed);
+  windows their frame and glass. The cut ("Planta - ..." objects) follows the walls, doors and
+  windows when they change.
 * **3D installation from the plan** ("Instalação 3D"): every run becomes a tube at its level
   (above the suspended ceiling for ceiling and wall runs, in the floor screed, or buried), with
   drops down the walls to 4x2 boxes at each item's height, octagonal boxes and lamps on the

@@ -57,7 +57,10 @@ starts FreeCAD outside that tree (through WMI if needed), so the drawing stays o
 * 2D (Draft): `draw_line`, `draw_polyline`, `draw_rectangle`, `draw_arc`, `draw_text`,
   `draw_dimension`, `draw_batch`, layers and styles.
 * 3D (BIM): `make_level`, `make_wall`, `make_walls`, `make_walls_from_objects`, `add_opening`
-  (doors and windows hosted in walls), `make_space` (rooms with area).
+  (doors and windows hosted in walls; doors open at 90°, as plans draw them), `make_space`
+  (rooms with area). `set_view` / `get_screenshot` show the top view of a building cut at 1,5 m
+  above its lowest wall, as a floor plan (`cut=False` for the roofline, or a height in mm); the
+  cut is a clipping plane of the view, not saved with the document.
 * Electrical plans, through the Electrical module (`src/Mod/Electrical`, the "Elétrica"
   workbench): `insert_electrical_symbol` and `set_electrical_item` (NBR 5444 items that carry
   power, circuit and room, on any floor), `create_circuit`/`set_circuit` (single-phase 220 V,

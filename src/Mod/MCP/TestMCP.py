@@ -118,7 +118,12 @@ class TestBim(unittest.TestCase):
         """The opening's solids lie within the wall thickness, between lo and hi along the wall."""
         from freecad_mcp.handlers.bim3d import solid_box
 
-        win = solid_box(self.doc.getObject(opening["name"]).Shape)
+        obj = self.doc.getObject(opening["name"])
+        if obj.IfcType == "Door":
+            self.assertEqual(obj.Opening, 100)  # open at 90°, as plans draw doors
+            obj.Opening = 0  # closed, its leaf lies in the wall
+            self.doc.recompute()
+        win = solid_box(obj.Shape)
         box = self.doc.getObject(wall["name"]).Shape.BoundBox
         if along == "x":
             self.assertGreaterEqual(win.YMin, box.YMin - 1)
@@ -142,6 +147,30 @@ class TestBim(unittest.TestCase):
                       height=1200, sill=1000)
         self.assertAlmostEqual(window["wall_volume_m3"], 1.428 - 1.2 * 1.2 * 0.15, places=3)
         self.assertAlmostEqual(self.doc.getObject(window["name"]).Shape.BoundBox.ZMin, 1000, delta=1)
+
+        # Plans cut the building at 1,5 m: the wall breaks at the door and at the window, the
+        # door swing is drawn dashed, and sheets draw the cut instead of the wall seen from above.
+        from freecad_electrical import sheets
+        from freecad_mcp.handlers import view
+
+        self.assertTrue(sheets.plan_cut(self.doc, force=True))
+        cut = {o.PlantaCorte: o for o in self.doc.Objects if sheets.PLAN_CUT in o.PropertiesList}
+        self.assertEqual(sorted(cut), ["aberturas", "giros", "paredes"])
+        self.assertEqual(len(cut["paredes"].Shape.Faces), 3)  # before the door, between, after the window
+        self.assertAlmostEqual(cut["paredes"].Shape.BoundBox.ZMin, 1, delta=0.01)  # on the floor
+        self.assertTrue(any(e.Curve.__class__.__name__ in ("Circle", "ArcOfCircle")
+                            for e in cut["giros"].Shape.Edges))
+        self.assertFalse(sheets.plan_cut(self.doc))  # nothing changed: not rebuilt
+        content = sheets.make_content(self.doc)
+        drawn = {o.Name for o in content.Proxy.svg_group(content)}
+        self.assertNotIn(wall["name"], drawn)
+        self.assertNotIn(door["name"], drawn)
+        self.assertTrue({o.Name for o in cut.values()} <= drawn)
+        # the 3D view: top view of a building cut at 1,5 m above its lowest wall, unless asked
+        self.assertEqual(view._cut_height(self.doc, None, "top"), 1500)
+        self.assertIsNone(view._cut_height(self.doc, None, "iso"))
+        self.assertIsNone(view._cut_height(self.doc, False, "top"))
+        self.assertEqual(view._cut_height(self.doc, 2400, "iso"), 2400)
 
     def test_aligned_and_vertical_walls(self):
         wall = call("make_wall", start=[0, 0], end=[0, 5000], width=200, height=3000, align="Left")

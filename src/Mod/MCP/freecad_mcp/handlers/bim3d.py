@@ -205,6 +205,10 @@ def add_opening(wall, kind="door", position=0, width=None, height=None, sill=Non
             base_pl = win.Base.Placement
             win.Base.Placement = App.Placement(base_pl.Base - right * off, base_pl.Rotation)
     win.Hosts = [host]
+    if is_door and hasattr(win, "Opening"):
+        # Open at 90°, as floor plans draw doors: the plan cut shows the leaf across the swing,
+        # not closed in the opening (after centring, which takes the closed leaf's box).
+        win.Opening = 100
     for parent in host.InList:
         if _type(parent) == "BuildingPart" and win not in parent.Group:
             parent.Group = parent.Group + [win]
