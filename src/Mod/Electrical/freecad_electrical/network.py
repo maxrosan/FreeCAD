@@ -444,13 +444,18 @@ class Network:
 
 def network(doc):
     """The routing of `doc`, rebuilt only when conduits, items or circuits changed."""
+    # One routing per open document: with two documents open, a cache of one would rebuild each
+    # of them in turn, and every rebuild redraws all the items of the plan. Closed documents go.
+    if len(_cache) > 1 or (_cache and (doc.Name, doc.Uid) not in _cache):
+        open_docs = {(d.Name, d.Uid) for d in App.listDocuments().values()}
+        for old in [k for k in _cache if k not in open_docs]:
+            del _cache[old]
     sig = _signature(doc)
     key = (doc.Name, doc.Uid)
     cached = _cache.get(key)
     if cached is not None and cached[0] == sig:
         return cached[1]
     net = Network(doc)
-    _cache.clear()  # one document at a time is enough, and closed documents must not linger
     _cache[key] = (sig, net)
     return net
 

@@ -358,6 +358,39 @@ class TestNetwork(unittest.TestCase):
         self.assertEqual(c1.Grouping, 1)
         self.assertFalse(b.Shape.isNull())
 
+    def test_two_documents_keep_their_routing(self):
+        # With one routing cached for all documents, two open plans rebuilt each other's in
+        # turn: every item looked stale and the sheets refreshed forever.
+        from freecad_electrical import layout, network
+
+        other = App.newDocument("TestRedeOutra")
+        try:
+            def settle(doc):  # what the sheets refresh does: recompute what is left stale
+                for _ in range(3):
+                    old = layout.stale(doc)
+                    if not old:
+                        return True
+                    for o in old:
+                        o.touch()
+                    doc.recompute()
+                return False
+
+            _house(self.doc)
+            _house(other)
+            self.doc.recompute()
+            other.recompute()
+            self.assertTrue(settle(self.doc))
+            self.assertTrue(settle(other))
+            net = network.network(self.doc)
+            network.network(other)
+            self.assertIs(network.network(self.doc), net)
+            self.assertEqual(layout.stale(self.doc), [])  # the other document's routing changes nothing here
+            self.assertEqual(layout.stale(other), [])
+        finally:
+            App.closeDocument(other.Name)
+        network.network(self.doc)
+        self.assertNotIn("TestRedeOutra", [name for name, _ in network._cache])
+
     def test_long_circuit_gets_a_bigger_conductor(self):
         qd, light, switch, socket, a, b, c = _house(self.doc)
         model.set_point(socket, power=2400)

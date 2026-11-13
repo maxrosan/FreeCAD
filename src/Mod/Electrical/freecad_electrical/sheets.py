@@ -659,6 +659,7 @@ class _Observer:
     def __init__(self):
         self.pending = set()
         self.held = set()  # documents waiting for release_updates()
+        self.stale_runs = {}  # document -> refreshes in a row that found stale items
 
     def _schedule(self, doc):
         if not App.GuiUp or doc is None or doc.Name in self.pending:
@@ -687,6 +688,15 @@ class _Observer:
             from . import layout
 
             old = layout.stale(doc)
+            # A recompute leaves every item on the current layout; if they are still stale right
+            # after it, recomputing again would never end (and keep FreeCAD busy): stop and say so.
+            runs = self.stale_runs.get(name, 0) + 1 if old else 0
+            self.stale_runs[name] = runs
+            if runs > MAX_STALE_RUNS:
+                App.Console.PrintWarning(f"Elétrica: {doc.Label}: os textos da planta não se "
+                                         f"assentam ({len(old)} itens); atualização interrompida\n")
+                self.stale_runs[name] = 0
+                old = []
             for obj in old:
                 obj.touch()
             if changed or old:
@@ -719,6 +729,7 @@ class _Observer:
 
 _observer = None
 _holds = 0
+MAX_STALE_RUNS = 3
 
 
 def hold_updates():
